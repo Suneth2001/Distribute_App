@@ -18,6 +18,7 @@ export default function HomePOSScreen() {
     const [cart, setCart] = useState<{ [key: string]: number }>({}); // { [productId]: quantity }
     const [customPrices, setCustomPrices] = useState<{ [key: string]: string }>({}); // { [productId]: overrides_price_string }
     const [searchQuery, setSearchQuery] = useState('');
+    const [shopSearchQuery, setShopSearchQuery] = useState('');
     const [isShopModalVisible, setIsShopModalVisible] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -401,7 +402,7 @@ export default function HomePOSScreen() {
                     <Text style={styles.selectorLabel}>Selling to Shop:</Text>
                     {selectedShopDetail && (
                         <Text style={[styles.selectorLabel, (currentDebt > 0) ? { color: '#EF4444' } : { color: '#10B981' }]}>
-                            Debt: Rs {currentDebt}
+                            Debt: Rs {currentDebt.toLocaleString()}
                         </Text>
                     )}
                 </View>
@@ -409,10 +410,31 @@ export default function HomePOSScreen() {
                     style={styles.dropdownButton}
                     onPress={() => setIsShopModalVisible(true)}
                 >
-                    <Text style={styles.dropdownButtonText}>
-                        {shops.find(s => s.id === selectedShop)?.name || "Select a shop..."}
+                    <Text style={[styles.dropdownButtonText, { flex: 1 }]} numberOfLines={1}>
+                        {selectedShopDetail?.name || "Select a shop..."}
                     </Text>
-                    <Ionicons name="chevron-down" size={20} color="#6B7280" />
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        {selectedShopDetail && (
+                            <View style={{
+                                paddingHorizontal: 8,
+                                paddingVertical: 2,
+                                borderRadius: 6,
+                                backgroundColor: (currentDebt > 0)
+                                    ? (isDark ? 'rgba(239, 68, 68, 0.2)' : '#FEE2E2')
+                                    : (isDark ? 'rgba(16, 185, 129, 0.2)' : '#D1FAE5'),
+                                marginRight: 8,
+                            }}>
+                                <Text style={{
+                                    fontSize: 12,
+                                    fontWeight: 'bold',
+                                    color: (currentDebt > 0) ? '#EF4444' : '#10B981'
+                                }}>
+                                    {(currentDebt > 0) ? `Rs ${currentDebt.toLocaleString()}` : 'Rs 0'}
+                                </Text>
+                            </View>
+                        )}
+                        <Ionicons name="chevron-down" size={20} color="#6B7280" />
+                    </View>
                 </TouchableOpacity>
             </View>
 
@@ -559,40 +581,117 @@ export default function HomePOSScreen() {
                 visible={isShopModalVisible}
                 transparent={true}
                 animationType="fade"
-                onRequestClose={() => setIsShopModalVisible(false)}
+                onRequestClose={() => {
+                    setIsShopModalVisible(false);
+                    setShopSearchQuery('');
+                }}
             >
-                <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setIsShopModalVisible(false)}>
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => {
+                        setIsShopModalVisible(false);
+                        setShopSearchQuery('');
+                    }}
+                >
                     <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Select Shop</Text>
-                            <TouchableOpacity onPress={() => setIsShopModalVisible(false)}>
-                                <Ionicons name="close" size={24} color="#6B7280" />
+                            <TouchableOpacity onPress={() => {
+                                setIsShopModalVisible(false);
+                                setShopSearchQuery('');
+                            }}>
+                                <Ionicons name="close" size={24} color={isDark ? "#9CA3AF" : "#6B7280"} />
                             </TouchableOpacity>
                         </View>
-                        <FlatList
-                            data={shops}
-                            keyExtractor={s => s.id}
-                            renderItem={({ item }) => (
-                                <TouchableOpacity
-                                    style={[styles.modalOption, selectedShop === item.id && styles.modalOptionActive]}
-                                    onPress={() => {
-                                        setSelectedShop(item.id);
-                                        setCart({});
-                                        setCustomPrices({});
-                                        setIsShopModalVisible(false);
-                                    }}
-                                >
-                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                        <Ionicons name="storefront-outline" size={20} color={selectedShop === item.id ? "#1D4ED8" : "#6B7280"} style={{ marginRight: 12 }} />
-                                        <Text style={[styles.modalOptionText, selectedShop === item.id && styles.modalOptionTextActive]}>
-                                            {item.name}
-                                        </Text>
-                                    </View>
-                                    {selectedShop === item.id && (
-                                        <Ionicons name="checkmark-circle" size={24} color="#3B82F6" />
-                                    )}
+
+                        {/* Search shop inside modal */}
+                        <View style={[styles.searchSection, { marginHorizontal: 0, marginBottom: 12, backgroundColor: isDark ? '#374151' : '#F3F4F6' }]}>
+                            <Ionicons name="search" size={18} color="#9CA3AF" style={styles.searchIcon} />
+                            <TextInput
+                                style={[styles.searchInput, { color: isDark ? '#FFF' : '#111827', fontSize: 14 }]}
+                                placeholder="Search shop..."
+                                placeholderTextColor={isDark ? '#9CA3AF' : '#999'}
+                                value={shopSearchQuery}
+                                onChangeText={setShopSearchQuery}
+                            />
+                            {shopSearchQuery.length > 0 && (
+                                <TouchableOpacity onPress={() => setShopSearchQuery('')}>
+                                    <Ionicons name="close-circle" size={18} color="#9CA3AF" />
                                 </TouchableOpacity>
                             )}
+                        </View>
+
+                        <FlatList
+                            data={shops.filter(s =>
+                                (s.name && s.name.toLowerCase().includes(shopSearchQuery.toLowerCase())) ||
+                                (s.address && s.address.toLowerCase().includes(shopSearchQuery.toLowerCase()))
+                            )}
+                            keyExtractor={s => s.id}
+                            keyboardShouldPersistTaps="handled"
+                            ListEmptyComponent={
+                                <Text style={{ textAlign: 'center', color: isDark ? '#9CA3AF' : '#6B7280', marginVertical: 20 }}>
+                                    No shops found
+                                </Text>
+                            }
+                            renderItem={({ item }) => {
+                                const debt = item.creditBalance || 0;
+                                const isSelected = selectedShop === item.id;
+                                return (
+                                    <TouchableOpacity
+                                        style={[styles.modalOption, isSelected && styles.modalOptionActive]}
+                                        onPress={() => {
+                                            setSelectedShop(item.id);
+                                            setCart({});
+                                            setCustomPrices({});
+                                            setIsShopModalVisible(false);
+                                            setShopSearchQuery('');
+                                        }}
+                                    >
+                                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                            <Ionicons
+                                                name="storefront-outline"
+                                                size={20}
+                                                color={isSelected ? (isDark ? "#60A5FA" : "#1D4ED8") : (isDark ? "#94A3B8" : "#6B7280")}
+                                                style={{ marginRight: 10 }}
+                                            />
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={[styles.modalOptionText, isSelected && styles.modalOptionTextActive]} numberOfLines={1}>
+                                                    {item.name}
+                                                </Text>
+                                                {item.contact ? (
+                                                    <Text style={{ fontSize: 11, color: isDark ? '#94A3B8' : '#6B7280', marginTop: 1 }}>
+                                                        {item.contact}
+                                                    </Text>
+                                                ) : null}
+                                            </View>
+                                        </View>
+
+                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                            <View style={{
+                                                paddingHorizontal: 8,
+                                                paddingVertical: 4,
+                                                borderRadius: 8,
+                                                backgroundColor: debt > 0
+                                                    ? (isDark ? 'rgba(239, 68, 68, 0.2)' : '#FEE2E2')
+                                                    : (isDark ? 'rgba(16, 185, 129, 0.2)' : '#D1FAE5'),
+                                                marginRight: isSelected ? 8 : 0,
+                                            }}>
+                                                <Text style={{
+                                                    fontSize: 12,
+                                                    fontWeight: '700',
+                                                    color: debt > 0 ? '#EF4444' : '#10B981',
+                                                }}>
+                                                    {debt > 0 ? `Debt: Rs ${debt.toLocaleString()}` : 'Rs 0'}
+                                                </Text>
+                                            </View>
+                                            {isSelected && (
+                                                <Ionicons name="checkmark-circle" size={22} color="#3B82F6" />
+                                            )}
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            }}
                         />
                     </View>
                 </TouchableOpacity>
