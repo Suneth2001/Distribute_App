@@ -1,5 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View, useColorScheme } from 'react-native';
 import { 
@@ -10,8 +12,14 @@ import {
     updatePassword, 
     getDatabaseStats, 
     exportDatabaseBackup, 
+    restoreDatabaseBackup,
     deleteOldTransactions 
 } from '../../src/store/database';
+import { 
+    getGoogleDriveSettings, 
+    saveGoogleDriveSettings,
+    GoogleDriveSettings
+} from '../../src/services/googleDriveBackup';
 
 export default function SettingsScreen() {
     const isDark = useColorScheme() === 'dark';
@@ -29,6 +37,26 @@ export default function SettingsScreen() {
     const [isPinModalVisible, setPinModalVisible] = useState(false);
     const [newPin, setNewPin] = useState('');
 
+    // Google Drive 11:59 PM Auto-Backup & Account Config Modal
+    const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
+    const [gdriveSettings, setGdriveSettings] = useState<GoogleDriveSettings>({
+        autoBackupEnabled: true,
+        backupTime: '23:59',
+        googleUserEmail: null,
+        accessToken: null,
+        refreshToken: null,
+        tokenExpiry: null,
+        folderId: null,
+        lastBackupDate: null,
+        lastBackupTimestamp: null,
+        lastBackupStatus: 'idle',
+        lastBackupError: null,
+    });
+    const [isGDriveConfigModalVisible, setGDriveConfigModalVisible] = useState(false);
+    const [emailInput, setEmailInput] = useState('');
+    const [tokenInput, setTokenInput] = useState('');
+    const [folderInput, setFolderInput] = useState('');
+
     // Storage & Database stats
     const [stats, setStats] = useState({
         productsCount: 0,
@@ -37,6 +65,7 @@ export default function SettingsScreen() {
         expensesCount: 0,
     });
     const [isBackingUp, setIsBackingUp] = useState(false);
+    const [isRestoring, setIsRestoring] = useState(false);
     const [isCleaning, setIsCleaning] = useState(false);
 
     const loadData = async () => {
@@ -49,6 +78,13 @@ export default function SettingsScreen() {
             
             const dbStats = await getDatabaseStats();
             setStats(dbStats);
+
+            const gd = await getGoogleDriveSettings();
+            setGdriveSettings(gd);
+            setAutoBackupEnabled(gd.autoBackupEnabled);
+            setEmailInput(gd.googleUserEmail || '');
+            setTokenInput(gd.accessToken || '');
+            setFolderInput(gd.folderId || '');
         } catch (e) {
             console.warn('loadData settings error:', e);
         }
@@ -60,18 +96,30 @@ export default function SettingsScreen() {
         }, [])
     );
 
-    const handleLogout = async () => {
-        Alert.alert('Logout', 'Are you sure you want to logout?', [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'Logout',
-                style: 'destructive',
-                onPress: async () => {
-                    await logoutUser();
-                    router.replace('/login');
-                }
-            }
-        ]);
+    const handleToggleAutoBackup = async (value: boolean) => {
+        setAutoBackupEnabled(value);
+        await saveGoogleDriveSettings({ autoBackupEnabled: value });
+    };
+
+    const handleSaveGoogleDriveConfig = async () => {
+        const trimmedEmail = emailInput.trim();
+        if (trimmedEmail && !trimmedEmail.includes('@')) {
+            Alert.alert('Invalid Email', 'Please enter a valid email address.');
+            return;
+        }
+
+        try {
+            const updated = await saveGoogleDriveSettings({
+                googleUserEmail: trimmedEmail || null,
+                accessToken: tokenInput.trim() || null,
+                folderId: folderInput.trim() || null,
+            });
+            setGdriveSettings(updated);
+            setGDriveConfigModalVisible(false);
+            Alert.alert('Success', 'Google Drive account configuration saved successfully.');
+        } catch (error: any) {
+            Alert.alert('Error', error?.message || 'Failed to save Google Drive configuration.');
+        }
     };
 
     const handleBackupDatabase = async () => {
@@ -85,6 +133,49 @@ export default function SettingsScreen() {
         } finally {
             setIsBackingUp(false);
         }
+    };
+
+    const handleRestoreDatabase = async () => {
+        if (isRestoring) return;
+        
+        Alert.alert(
+            'Restore Database',
+            'Select a POS Backup JSON file (.json) to restore your products, shops, and bill history. Existing data will be updated with the backup file.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Choose File',
+                    onPress: async () => {
+                        try {
+                            const pickerRes = await DocumentPicker.getDocumentAsync({
+                                type: ['application/json', 'text/json', '*/*'],
+                                copyToCacheDirectory: true,
+                            });
+
+                            if (pickerRes.canceled || !pickerRes.assets || pickerRes.assets.length === 0) {
+                                return;
+                            }
+
+                            setIsRestoring(true);
+                            const fileUri = pickerRes.assets[0].uri;
+                            const fileContent = await FileSystem.readAsStringAsync(fileUri);
+
+                            const res = await restoreDatabaseBackup(fileContent);
+                            await loadData();
+
+                            Alert.alert(
+                                'Restore Successful',
+                                `Database restored successfully!\n\n• Bills: ${res.restoredBills}\n• Products: ${res.restoredProducts}\n• Shops: ${res.restoredShops}\n• Expenses: ${res.restoredExpenses}`
+                            );
+                        } catch (error: any) {
+                            Alert.alert('Restore Failed', error?.message || 'Invalid backup file or failed to restore.');
+                        } finally {
+                            setIsRestoring(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const handleDeleteOldHistory = async (days: number = 30) => {
@@ -112,6 +203,20 @@ export default function SettingsScreen() {
                 }
             ]
         );
+    };
+
+    const handleLogout = async () => {
+        Alert.alert('Logout', 'Are you sure you want to logout?', [
+            { text: 'Cancel', style: 'cancel' },
+            {
+                text: 'Logout',
+                style: 'destructive',
+                onPress: async () => {
+                    await logoutUser();
+                    router.replace('/login');
+                }
+            }
+        ]);
     };
 
     const toggleBiometrics = async (value: boolean) => {
@@ -269,7 +374,29 @@ export default function SettingsScreen() {
                     </View>
                 </View>
 
-                {/* Backup Database */}
+                {/* Google Drive 11:59 PM Auto-Backup & Account Modal trigger */}
+                <TouchableOpacity 
+                    style={styles.settingItem} 
+                    onPress={() => setGDriveConfigModalVisible(true)}
+                    activeOpacity={0.7}
+                >
+                    <View style={[styles.settingIcon, { backgroundColor: '#10B98120' }]}>
+                        <Ionicons name="logo-google" size={22} color="#10B981" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.settingText}>Google Drive Auto-Backup</Text>
+                        <Text style={styles.settingSubtext}>
+                            {gdriveSettings.googleUserEmail ? `${gdriveSettings.googleUserEmail} • 11:59 PM` : 'Configure Account • 11:59 PM Everyday'}
+                        </Text>
+                    </View>
+                    <Switch
+                        value={autoBackupEnabled}
+                        onValueChange={handleToggleAutoBackup}
+                        trackColor={{ false: '#767577', true: '#10B981' }}
+                    />
+                </TouchableOpacity>
+
+                {/* Backup Database File */}
                 <TouchableOpacity 
                     style={styles.settingItem} 
                     onPress={handleBackupDatabase}
@@ -283,10 +410,30 @@ export default function SettingsScreen() {
                         )}
                     </View>
                     <View style={{ flex: 1 }}>
-                        <Text style={styles.settingText}>Backup Database</Text>
+                        <Text style={styles.settingText}>Backup Database File</Text>
                         <Text style={styles.settingSubtext}>Export all bills, shops & products to file</Text>
                     </View>
                     <Ionicons name="share-outline" size={20} color={isDark ? '#4B5563' : '#D1D5DB'} />
+                </TouchableOpacity>
+
+                {/* Restore Database */}
+                <TouchableOpacity 
+                    style={styles.settingItem} 
+                    onPress={handleRestoreDatabase}
+                    disabled={isRestoring}
+                >
+                    <View style={[styles.settingIcon, { backgroundColor: '#8B5CF620' }]}>
+                        {isRestoring ? (
+                            <ActivityIndicator size="small" color="#8B5CF6" />
+                        ) : (
+                            <Ionicons name="cloud-upload-outline" size={22} color="#8B5CF6" />
+                        )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.settingText}>Restore Database</Text>
+                        <Text style={styles.settingSubtext}>Import backup JSON file to restore data</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={isDark ? '#4B5563' : '#D1D5DB'} />
                 </TouchableOpacity>
 
                 {/* Clean Old History */}
@@ -318,12 +465,12 @@ export default function SettingsScreen() {
                     <Text style={styles.infoValue}>v1.2.0 (High Performance Engine)</Text>
                 </View>
                 <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Storage Architecture</Text>
-                    <Text style={styles.infoValue}>Partitioned Local Storage</Text>
+                    <Text style={styles.infoLabel}>Auto-Save</Text>
+                    <Text style={styles.infoValue}>Everyday at 11:59 PM</Text>
                 </View>
                 <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Security Level</Text>
-                    <Text style={styles.infoValue}>High (Encrypted Local)</Text>
+                    <Text style={styles.infoLabel}>Storage Architecture</Text>
+                    <Text style={styles.infoValue}>Partitioned Local Storage</Text>
                 </View>
             </View>
 
@@ -337,6 +484,63 @@ export default function SettingsScreen() {
                 </View>
                 <Text style={styles.copyText}>© 2026 All Rights Reserved</Text>
             </View>
+
+            {/* Google Drive Account Configuration Modal */}
+            <Modal visible={isGDriveConfigModalVisible} animationType="slide" transparent={true}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Google Drive Configuration</Text>
+                            <TouchableOpacity onPress={() => setGDriveConfigModalVisible(false)}>
+                                <Ionicons name="close" size={24} color={isDark ? '#F9FAFB' : '#1F2937'} />
+                            </TouchableOpacity>
+                        </View>
+                        <ScrollView style={styles.modalBody}>
+                            <Text style={styles.inputLabel}>Google Drive Email Address *</Text>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="yourname@gmail.com"
+                                placeholderTextColor="#9CA3AF"
+                                autoCapitalize="none"
+                                keyboardType="email-address"
+                                value={emailInput}
+                                onChangeText={setEmailInput}
+                            />
+
+                            <Text style={styles.inputLabel}>Google OAuth Token / API Key (Optional)</Text>
+                            <TextInput
+                                style={[styles.input, { minHeight: 60 }]}
+                                placeholder="Paste token for direct Drive upload (optional)"
+                                placeholderTextColor="#9CA3AF"
+                                multiline
+                                value={tokenInput}
+                                onChangeText={setTokenInput}
+                            />
+
+                            <Text style={styles.inputLabel}>Drive Folder ID (Optional)</Text>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="e.g. 1a2b3c4d5e6f (optional)"
+                                placeholderTextColor="#9CA3AF"
+                                autoCapitalize="none"
+                                value={folderInput}
+                                onChangeText={setFolderInput}
+                            />
+
+                            <View style={styles.gdriveNoticeBox}>
+                                <Ionicons name="time" size={20} color="#3B82F6" style={{ marginRight: 8 }} />
+                                <Text style={styles.gdriveNoticeText}>
+                                    The app will automatically save your entire database backup every day at 11:59 PM.
+                                </Text>
+                            </View>
+
+                            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveGoogleDriveConfig}>
+                                <Text style={styles.saveBtnText}>Save Configuration</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </View>
+                </View>
+            </Modal>
 
             {/* Password Modal */}
             <Modal visible={isPasswordModalVisible} animationType="slide" transparent={true}>
@@ -475,6 +679,21 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
     settingIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 15 },
     settingText: { fontSize: 16, fontWeight: '700', color: isDark ? '#F9FAFB' : '#111827' },
     settingSubtext: { fontSize: 12, color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 2 },
+
+    gdriveNoticeBox: {
+        flexDirection: 'row',
+        backgroundColor: '#3B82F615',
+        padding: 12,
+        borderRadius: 12,
+        marginTop: 12,
+        alignItems: 'center',
+    },
+    gdriveNoticeText: {
+        flex: 1,
+        fontSize: 13,
+        color: isDark ? '#93C5FD' : '#1D4ED8',
+        lineHeight: 18,
+    },
 
     infoRow: {
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

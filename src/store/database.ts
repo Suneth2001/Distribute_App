@@ -480,6 +480,73 @@ export const exportDatabaseBackup = async (): Promise<string> => {
     }
 };
 
+/**
+ * Restore complete database from a backup object or JSON string
+ */
+export const restoreDatabaseBackup = async (backupInput: string | any): Promise<{
+    restoredBills: number;
+    restoredProducts: number;
+    restoredShops: number;
+    restoredExpenses: number;
+}> => {
+    try {
+        let parsed: any;
+        if (typeof backupInput === 'string') {
+            parsed = JSON.parse(backupInput);
+        } else {
+            parsed = backupInput;
+        }
+
+        const data = parsed.data || parsed;
+        if (!data) {
+            throw new Error('Invalid backup file structure: missing data payload.');
+        }
+
+        let restoredProducts = 0;
+        let restoredShops = 0;
+        let restoredBills = 0;
+        let restoredExpenses = 0;
+
+        if (Array.isArray(data.products)) {
+            await setProducts(data.products);
+            restoredProducts = data.products.length;
+        }
+
+        if (Array.isArray(data.shops)) {
+            await setShops(data.shops);
+            restoredShops = data.shops.length;
+        }
+
+        if (Array.isArray(data.categories)) {
+            await setCategories(data.categories);
+        }
+
+        if (Array.isArray(data.transactions)) {
+            await setTransactions(data.transactions);
+            restoredBills = data.transactions.length;
+        }
+
+        if (Array.isArray(data.expenses)) {
+            await setExpenses(data.expenses);
+            restoredExpenses = data.expenses.length;
+        }
+
+        if (data.security) {
+            await setSecuritySettings(data.security);
+        }
+
+        return {
+            restoredBills,
+            restoredProducts,
+            restoredShops,
+            restoredExpenses,
+        };
+    } catch (error) {
+        console.error('restoreDatabaseBackup error:', error);
+        throw error;
+    }
+};
+
 // Seed db if empty
 export const seedDatabase = async () => {
     await getCategories();
