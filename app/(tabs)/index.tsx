@@ -17,6 +17,7 @@ export default function HomePOSScreen() {
     const [shops, setShops] = useState<any[]>([]);
     const [selectedShop, setSelectedShop] = useState<string | null>(null);
     const [cart, setCart] = useState<{ [key: string]: number }>({}); // { [productId]: quantity }
+    const [cartOrder, setCartOrder] = useState<string[]>([]); // Keeps track of insertion order so latest items appear at the top
     const [customPrices, setCustomPrices] = useState<{ [key: string]: string }>({}); // { [productId]: overrides_price_string }
     const [searchQuery, setSearchQuery] = useState('');
     const [shopSearchQuery, setShopSearchQuery] = useState('');
@@ -57,13 +58,9 @@ export default function HomePOSScreen() {
         const product = products.find(p => p.id === productId);
         if (!product) return;
 
-        // B2B: Often products are sold even if database stock is inaccurate
-        // if ((cart[productId] || 0) + 1 > product.stock) {
-        //     Alert.alert('Stock Level', 'Not enough stock available');
-        //     return;
-        // }
-
         setCart(prev => ({ ...prev, [productId]: (prev[productId] || 0) + 1 }));
+        // Put the most recently added item at the top of the table list
+        setCartOrder(prev => [productId, ...prev.filter(id => id !== productId)]);
     };
 
     const removeFromCart = (productId: string) => {
@@ -73,6 +70,7 @@ export default function HomePOSScreen() {
                 newCart[productId] -= 1;
             } else {
                 delete newCart[productId];
+                setCartOrder(order => order.filter(id => id !== productId));
 
                 // Clear custom price when totally removed from cart
                 setCustomPrices(prevPrices => {
@@ -89,6 +87,7 @@ export default function HomePOSScreen() {
         setCart(prev => {
             const newCart = { ...prev };
             delete newCart[productId];
+            setCartOrder(order => order.filter(id => id !== productId));
 
             setCustomPrices(prevPrices => {
                 const newPrices = { ...prevPrices };
@@ -190,6 +189,7 @@ export default function HomePOSScreen() {
 
             // Clear cart & close modal immediately so UI is completely unblocked
             setCart({}); // clear cart
+            setCartOrder([]);
             setCustomPrices({}); // clear overrides
             setPaidAmount('');
             setCheckoutModalVisible(false);
@@ -473,9 +473,7 @@ export default function HomePOSScreen() {
                             (p.nameSinhala && p.nameSinhala.toLowerCase().includes(searchQuery.toLowerCase()))
                         ).slice(0, 10).map(p => (
                             <TouchableOpacity key={p.id} style={styles.searchResultItem} onPress={() => {
-                                if (!cart[p.id]) {
-                                    addToCart(p.id);
-                                }
+                                addToCart(p.id);
                                 setSearchQuery('');
                             }}>
                                 <View style={{ flex: 1 }}>
@@ -499,7 +497,9 @@ export default function HomePOSScreen() {
                 </View>
 
                 <FlatList
-                    data={products.filter((p: any) => cart[p.id])}
+                    data={cartOrder
+                        .map(id => products.find((p: any) => p.id === id))
+                        .filter((p: any) => p && cart[p.id] !== undefined)}
                     keyExtractor={(p: any) => p.id}
                     keyboardShouldPersistTaps="handled"
                     ListEmptyComponent={
