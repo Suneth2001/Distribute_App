@@ -648,8 +648,6 @@ export default function HomePOSScreen() {
                                         style={[styles.modalOption, isSelected && styles.modalOptionActive]}
                                         onPress={() => {
                                             setSelectedShop(item.id);
-                                            setCart({});
-                                            setCustomPrices({});
                                             setIsShopModalVisible(false);
                                             setShopSearchQuery('');
                                         }}
