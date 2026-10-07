@@ -142,8 +142,42 @@ export const setShops = async (shops: any[]) => {
 
 // --- Partitioned / Chunked Transactions for High Performance & Zero-Freeze ---
 
-const getMonthKey = (dateStr?: string | Date): string => {
-    const d = dateStr ? new Date(dateStr) : new Date();
+// Date normalization utility for all historical backup formats
+export const normalizeDate = (rawDate: any): string => {
+    if (!rawDate) return new Date().toISOString();
+    if (rawDate instanceof Date) {
+        return isNaN(rawDate.getTime()) ? new Date().toISOString() : rawDate.toISOString();
+    }
+    if (typeof rawDate === 'number') {
+        const d = new Date(rawDate);
+        return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+    }
+    if (typeof rawDate === 'string') {
+        const trimmed = rawDate.trim();
+        // If it's a numeric timestamp string e.g. "1715493829000"
+        if (/^\d{10,13}$/.test(trimmed)) {
+            const num = parseInt(trimmed, 10);
+            const d = new Date(num);
+            if (!isNaN(d.getTime())) return d.toISOString();
+        }
+        // Try direct parse
+        const d = new Date(trimmed);
+        if (!isNaN(d.getTime())) return d.toISOString();
+
+        // Try formats like DD/MM/YYYY or DD-MM-YYYY
+        const dmyMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(.*)$/);
+        if (dmyMatch) {
+            const [, day, month, year, rest] = dmyMatch;
+            const parsed = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}${rest || 'T12:00:00.000Z'}`);
+            if (!isNaN(parsed.getTime())) return parsed.toISOString();
+        }
+    }
+    return new Date().toISOString();
+};
+
+const getMonthKey = (dateStr?: string | Date | number): string => {
+    const iso = normalizeDate(dateStr);
+    const d = new Date(iso);
     const yyyy = d.getFullYear();
     const mm = (d.getMonth() + 1).toString().padStart(2, '0');
     return `${yyyy}-${mm}`;
@@ -159,7 +193,7 @@ const getStoredMonths = async (): Promise<string[]> => {
 };
 
 const setStoredMonths = async (months: string[]) => {
-    const unique = Array.from(new Set(months)).sort().reverse();
+    const unique = Array.from(new Set(months.filter(m => m && !m.includes('NaN')))).sort().reverse();
     await AsyncStorage.setItem(TRANSACTIONS_MONTHS_KEY, JSON.stringify(unique));
 };
 
@@ -322,15 +356,61 @@ export const getNextBillNumber = async (date: Date = new Date()): Promise<string
 };
 
 /**
- * Bulk overwrite / rewrite transactions (used for returns, edits, or full sync).
+ * Bulk overwrite / rewrite transactions (used for returns, edits, or full sync / restore).
  */
 export const setTransactions = async (trans: any[]) => {
     try {
         if (!Array.isArray(trans)) return;
 
+        // Normalize transactions and ensure clean item arrays and date fields
+        const normalized = trans.map((tx: any, idx: number) => {
+            const dateIso = normalizeDate(tx.date || tx.createdAt || tx.timestamp || tx.time || tx.billDate);
+            const rawItems = Array.isArray(tx.items) ? tx.items : (Array.isArray(tx.products) ? tx.products : []);
+            
+            const cleanItems = rawItems.map((item: any, iIdx: number) => {
+                const qty = typeof item.qty === 'number' ? item.qty : (parseFloat(item.qty) || 1);
+                const unitPrice = typeof item.unitPrice === 'number' ? item.unitPrice : (parseFloat(item.unitPrice) || parseFloat(item.price) || 0);
+                const totalPrice = typeof item.totalPrice === 'number' ? item.totalPrice : (parseFloat(item.totalPrice) || (unitPrice * qty));
+                const cost = typeof item.cost === 'number' ? item.cost : (parseFloat(item.cost) || 0);
+                return {
+                    ...item,
+                    id: item.id || `item_${idx}_${iIdx}`,
+                    nameEnglish: item.nameEnglish || item.name || item.title || 'Product',
+                    nameSinhala: item.nameSinhala || '',
+                    qty,
+                    unitPrice,
+                    totalPrice,
+                    cost,
+                    isReturned: !!item.isReturned,
+                    returnedQty: item.returnedQty || 0,
+                };
+            });
+
+            const total = typeof tx.total === 'number' ? tx.total : (parseFloat(tx.total) || cleanItems.reduce((sum: number, it: any) => sum + (it.totalPrice || 0), 0));
+            const totalCost = typeof tx.totalCost === 'number' ? tx.totalCost : (parseFloat(tx.totalCost) || cleanItems.reduce((sum: number, it: any) => sum + (it.cost || 0), 0));
+            const netTotal = typeof tx.netTotal === 'number' ? tx.netTotal : total;
+            const profit = typeof tx.profit === 'number' ? tx.profit : (total - totalCost);
+
+            return {
+                ...tx,
+                id: tx.id || `TX_${Date.now()}_${idx}`,
+                date: dateIso,
+                shopId: tx.shopId || 's1',
+                shopName: tx.shopName || tx.customerName || 'Default Shop',
+                items: cleanItems,
+                total,
+                netTotal,
+                totalCost,
+                profit,
+                paidAmount: typeof tx.paidAmount === 'number' ? tx.paidAmount : (parseFloat(tx.paidAmount) || total),
+                change: typeof tx.change === 'number' ? tx.change : (parseFloat(tx.change) || 0),
+                paymentMethod: tx.paymentMethod || 'cash'
+            };
+        });
+
         // Group by month
         const groups: { [month: string]: any[] } = {};
-        trans.forEach((tx: any) => {
+        normalized.forEach((tx: any) => {
             const month = getMonthKey(tx.date);
             if (!groups[month]) groups[month] = [];
             groups[month].push(tx);
@@ -481,65 +561,146 @@ export const exportDatabaseBackup = async (): Promise<string> => {
 };
 
 /**
- * Restore complete database from a backup object or JSON string
+ * Universal restore: safely parses backups from any past app version,
+ * AsyncStorage dump, or direct table arrays.
  */
 export const restoreDatabaseBackup = async (backupInput: string | any): Promise<{
     restoredBills: number;
     restoredProducts: number;
     restoredShops: number;
     restoredExpenses: number;
+    restoredCategories: number;
 }> => {
     try {
-        let parsed: any;
+        let parsed: any = backupInput;
         if (typeof backupInput === 'string') {
-            parsed = JSON.parse(backupInput);
-        } else {
-            parsed = backupInput;
+            const cleanStr = backupInput.replace(/^\uFEFF/, '').trim();
+            parsed = JSON.parse(cleanStr);
+            // In case of double stringified JSON
+            if (typeof parsed === 'string') {
+                try {
+                    parsed = JSON.parse(parsed);
+                } catch {}
+            }
         }
 
-        const data = parsed.data || parsed;
-        if (!data) {
-            throw new Error('Invalid backup file structure: missing data payload.');
+        if (!parsed) {
+            throw new Error('Invalid backup file: file is empty.');
+        }
+
+        // 1. Check if it's an array of key-value tuples: [ ["@pos_products", "..."], ... ]
+        if (Array.isArray(parsed) && parsed.length > 0 && Array.isArray(parsed[0]) && typeof parsed[0][0] === 'string') {
+            const dict: any = {};
+            for (const [key, val] of parsed) {
+                try {
+                    dict[key] = typeof val === 'string' ? JSON.parse(val) : val;
+                } catch {
+                    dict[key] = val;
+                }
+            }
+            parsed = dict;
+        }
+
+        // 2. Extract data payload
+        let rawData = parsed.data || parsed.payload || parsed;
+        if (typeof rawData === 'string') {
+            try {
+                rawData = JSON.parse(rawData);
+            } catch {}
         }
 
         let restoredProducts = 0;
         let restoredShops = 0;
         let restoredBills = 0;
         let restoredExpenses = 0;
+        let restoredCategories = 0;
 
-        if (Array.isArray(data.products)) {
-            await setProducts(data.products);
-            restoredProducts = data.products.length;
+        // Products extraction (products / items / @pos_products)
+        let productsList = rawData.products || rawData.items || rawData[PRODUCTS_KEY] || parsed[PRODUCTS_KEY];
+        if (typeof productsList === 'string') {
+            try { productsList = JSON.parse(productsList); } catch {}
+        }
+        if (Array.isArray(productsList) && productsList.length > 0) {
+            await setProducts(productsList);
+            restoredProducts = productsList.length;
+        } else if (productsList && typeof productsList === 'object' && Object.keys(productsList).length > 0) {
+            const arr = Object.values(productsList);
+            await setProducts(arr);
+            restoredProducts = arr.length;
         }
 
-        if (Array.isArray(data.shops)) {
-            await setShops(data.shops);
-            restoredShops = data.shops.length;
+        // Shops extraction (shops / customers / clients / @pos_shops)
+        let shopsList = rawData.shops || rawData.customers || rawData.clients || rawData[SHOPS_KEY] || parsed[SHOPS_KEY];
+        if (typeof shopsList === 'string') {
+            try { shopsList = JSON.parse(shopsList); } catch {}
+        }
+        if (Array.isArray(shopsList) && shopsList.length > 0) {
+            await setShops(shopsList);
+            restoredShops = shopsList.length;
+        } else if (shopsList && typeof shopsList === 'object' && Object.keys(shopsList).length > 0) {
+            const arr = Object.values(shopsList);
+            await setShops(arr);
+            restoredShops = arr.length;
         }
 
-        if (Array.isArray(data.categories)) {
-            await setCategories(data.categories);
+        // Categories extraction
+        let categoriesList = rawData.categories || rawData.category || rawData[CATEGORIES_KEY] || parsed[CATEGORIES_KEY];
+        if (typeof categoriesList === 'string') {
+            try { categoriesList = JSON.parse(categoriesList); } catch {}
+        }
+        if (Array.isArray(categoriesList) && categoriesList.length > 0) {
+            await setCategories(categoriesList);
+            restoredCategories = categoriesList.length;
         }
 
-        if (Array.isArray(data.transactions)) {
-            await setTransactions(data.transactions);
-            restoredBills = data.transactions.length;
+        // Transactions extraction (transactions / bills / history / orders / sales / @pos_transactions)
+        let transactionsList = rawData.transactions || rawData.bills || rawData.history || rawData.orders || rawData.sales || rawData[LEGACY_TRANSACTIONS_KEY] || parsed[LEGACY_TRANSACTIONS_KEY];
+        if (typeof transactionsList === 'string') {
+            try { transactionsList = JSON.parse(transactionsList); } catch {}
         }
 
-        if (Array.isArray(data.expenses)) {
-            await setExpenses(data.expenses);
-            restoredExpenses = data.expenses.length;
+        // If root was an array of transactions
+        if (!transactionsList && Array.isArray(parsed) && parsed.length > 0 && (parsed[0].items || parsed[0].total !== undefined || parsed[0].shopId || parsed[0].shopName)) {
+            transactionsList = parsed;
         }
 
-        if (data.security) {
-            await setSecuritySettings(data.security);
+        if (Array.isArray(transactionsList) && transactionsList.length > 0) {
+            await setTransactions(transactionsList);
+            restoredBills = transactionsList.length;
+        } else if (transactionsList && typeof transactionsList === 'object' && Object.keys(transactionsList).length > 0) {
+            const arr = Object.values(transactionsList);
+            await setTransactions(arr);
+            restoredBills = arr.length;
         }
+
+        // Expenses extraction
+        let expensesList = rawData.expenses || rawData.costs || rawData[EXPENSES_KEY] || parsed[EXPENSES_KEY];
+        if (typeof expensesList === 'string') {
+            try { expensesList = JSON.parse(expensesList); } catch {}
+        }
+        if (Array.isArray(expensesList) && expensesList.length > 0) {
+            await setExpenses(expensesList);
+            restoredExpenses = expensesList.length;
+        }
+
+        // Security extraction
+        let sec = rawData.security || rawData.securitySettings || rawData[SECURITY_SETTINGS_KEY] || parsed[SECURITY_SETTINGS_KEY];
+        if (typeof sec === 'string') {
+            try { sec = JSON.parse(sec); } catch {}
+        }
+        if (sec && typeof sec === 'object') {
+            await setSecuritySettings(sec);
+        }
+
+        // Ensure default admin & shops exist
+        await seedDatabase();
 
         return {
             restoredBills,
             restoredProducts,
             restoredShops,
             restoredExpenses,
+            restoredCategories,
         };
     } catch (error) {
         console.error('restoreDatabaseBackup error:', error);

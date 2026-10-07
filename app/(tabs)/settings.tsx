@@ -140,7 +140,7 @@ export default function SettingsScreen() {
         
         Alert.alert(
             'Restore Database',
-            'Select a POS Backup JSON file (.json) to restore your products, shops, and bill history. Existing data will be updated with the backup file.',
+            'Select your POS Backup file (.json) to restore your products, shops, and bill history.',
             [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -148,7 +148,7 @@ export default function SettingsScreen() {
                     onPress: async () => {
                         try {
                             const pickerRes = await DocumentPicker.getDocumentAsync({
-                                type: ['application/json', 'text/json', '*/*'],
+                                type: ['*/*'],
                                 copyToCacheDirectory: true,
                             });
 
@@ -158,7 +158,9 @@ export default function SettingsScreen() {
 
                             setIsRestoring(true);
                             const fileUri = pickerRes.assets[0].uri;
-                            const fileContent = await FileSystem.readAsStringAsync(fileUri);
+                            const fileContent = await FileSystem.readAsStringAsync(fileUri, {
+                                encoding: FileSystem.EncodingType.UTF8
+                            });
 
                             const res = await restoreDatabaseBackup(fileContent);
                             await loadData();

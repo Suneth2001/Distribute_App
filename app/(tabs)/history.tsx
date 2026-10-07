@@ -17,7 +17,7 @@ export default function HistoryScreen() {
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedBill, setSelectedBill] = useState<any>(null);
     const [isDetailModalVisible, setDetailModalVisible] = useState(false);
-    const [activeMonth, setActiveMonth] = useState<Date | null>(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+    const [activeMonth, setActiveMonth] = useState<Date | null>(null);
     const [availableMonths, setAvailableMonths] = useState<Date[]>([]);
     
     // Return Item States
@@ -46,8 +46,10 @@ export default function HistoryScreen() {
 
         t.forEach((tx: any) => {
             const d = new Date(tx.date);
-            const startOfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-            monthMap.set(startOfMonth.getTime(), startOfMonth);
+            if (!isNaN(d.getTime())) {
+                const startOfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+                monthMap.set(startOfMonth.getTime(), startOfMonth);
+            }
         });
 
         const sortedMonths = Array.from(monthMap.values()).sort((a, b) => b.getTime() - a.getTime());

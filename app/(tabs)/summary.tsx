@@ -53,17 +53,20 @@ export default function SummaryScreen() {
         const itemMap: { [key: string]: { name: string, qty: number, total: number } } = {};
 
         filteredTrans.forEach(t => {
-            tSales += t.total;
-            tCosts += t.totalCost || 0;
+            tSales += typeof t.total === 'number' ? t.total : (parseFloat(t.total) || 0);
+            tCosts += typeof t.totalCost === 'number' ? t.totalCost : (parseFloat(t.totalCost) || 0);
 
-            t.items.forEach((item: any) => {
+            const itemsList = Array.isArray(t.items) ? t.items : (Array.isArray(t.products) ? t.products : []);
+            itemsList.forEach((item: any) => {
                 if (item.isReturned) return; // Skip returned items
-                const id = item.id;
+                const id = item.id || item.productId || item.nameEnglish || 'unknown';
                 if (!itemMap[id]) {
-                    itemMap[id] = { name: item.nameEnglish, qty: 0, total: 0 };
+                    itemMap[id] = { name: item.nameEnglish || item.name || item.title || 'Product', qty: 0, total: 0 };
                 }
-                itemMap[id].qty += item.qty;
-                itemMap[id].total += item.totalPrice;
+                const q = typeof item.qty === 'number' ? item.qty : (parseFloat(item.qty) || 0);
+                const tot = typeof item.totalPrice === 'number' ? item.totalPrice : (parseFloat(item.totalPrice) || 0);
+                itemMap[id].qty += q;
+                itemMap[id].total += tot;
             });
         });
 
