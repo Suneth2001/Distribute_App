@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useColorScheme } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -379,12 +380,17 @@ export default function HomePOSScreen() {
     `;
 
         try {
-            await Print.printAsync({
+            const { uri } = await Print.printToFileAsync({
                 html,
                 width: 560, // Optimized for high-fill on thermal printers
             });
+            await Sharing.shareAsync(uri, {
+                mimeType: 'application/pdf',
+                dialogTitle: 'Print Receipt with 4Barcode',
+                UTI: 'com.adobe.pdf'
+            });
         } catch (error) {
-            Alert.alert('Print Error', 'Could not open print manager');
+            Alert.alert('Print Error', 'Could not open print / share manager');
         }
     };
 

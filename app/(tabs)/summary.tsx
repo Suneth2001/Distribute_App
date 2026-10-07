@@ -1,7 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
+    Alert,
     Dimensions,
     Modal,
     RefreshControl,
@@ -18,6 +21,8 @@ import { getExpenses, getProducts, getTransactions } from '../../src/store/datab
 interface ThreeDayItem {
     id: string;
     name: string;
+    nameSinhala?: string;
+    nameEnglish?: string;
     twoDaysQty: number;
     yestQty: number;
     todayQty: number;
@@ -102,8 +107,13 @@ export default function SummaryScreen() {
             itemsList.forEach((item: any) => {
                 if (item.isReturned) return; // Skip returned items
                 const id = item.id || item.productId || item.nameEnglish || 'unknown';
+                const prod = allProducts.find(p => p.id === id || p.nameEnglish === item.nameEnglish || (item.nameSinhala && p.nameSinhala === item.nameSinhala));
+                const sinhalaName = item.nameSinhala || prod?.nameSinhala || '';
+                const englishName = item.nameEnglish || prod?.nameEnglish || item.name || item.title || 'Product';
+                const displayName = sinhalaName || englishName;
+
                 if (!itemMap[id]) {
-                    itemMap[id] = { name: item.nameEnglish || item.name || item.title || 'Product', qty: 0, total: 0 };
+                    itemMap[id] = { name: displayName, qty: 0, total: 0 };
                 }
                 const q = typeof item.qty === 'number' ? item.qty : (parseFloat(item.qty) || 0);
                 const tot = typeof item.totalPrice === 'number' ? item.totalPrice : (parseFloat(item.totalPrice) || 0);
@@ -127,11 +137,15 @@ export default function SummaryScreen() {
 
         const threeDayMap: { [key: string]: ThreeDayItem } = {};
 
-        // Seed with products
+        // Seed with all products from database
         allProducts.forEach(p => {
+            const sName = p.nameSinhala || '';
+            const eName = p.nameEnglish || p.name || 'Product';
             threeDayMap[p.id] = {
                 id: p.id,
-                name: p.nameEnglish || p.name || 'Product',
+                name: sName || eName,
+                nameSinhala: sName,
+                nameEnglish: eName,
                 twoDaysQty: 0,
                 yestQty: 0,
                 todayQty: 0,
@@ -154,15 +168,27 @@ export default function SummaryScreen() {
             itemsList.forEach((item: any) => {
                 if (item.isReturned) return;
                 const id = item.id || item.productId || item.nameEnglish || 'unknown';
+                const prod = allProducts.find(p => p.id === id || p.nameEnglish === item.nameEnglish || (item.nameSinhala && p.nameSinhala === item.nameSinhala));
+                const sinhalaName = item.nameSinhala || prod?.nameSinhala || '';
+                const englishName = item.nameEnglish || prod?.nameEnglish || item.name || item.title || 'Product';
+                const displayName = sinhalaName || englishName;
+
                 if (!threeDayMap[id]) {
                     threeDayMap[id] = {
                         id,
-                        name: item.nameEnglish || item.name || item.title || 'Product',
+                        name: displayName,
+                        nameSinhala: sinhalaName,
+                        nameEnglish: englishName,
                         twoDaysQty: 0,
                         yestQty: 0,
                         todayQty: 0,
                         total3DayQty: 0,
                     };
+                } else {
+                    if (sinhalaName && !threeDayMap[id].nameSinhala) {
+                        threeDayMap[id].nameSinhala = sinhalaName;
+                        threeDayMap[id].name = sinhalaName;
+                    }
                 }
                 const q = typeof item.qty === 'number' ? item.qty : (parseFloat(item.qty) || 0);
                 if (isToday) threeDayMap[id].todayQty += q;
@@ -182,6 +208,146 @@ export default function SummaryScreen() {
         setTopItems(sortedItems);
         setThreeDaySales(threeDayList);
         setRefreshing(false);
+    };
+
+    const handlePrintChecklist = async () => {
+        if (threeDaySales.length === 0) {
+            Alert.alert("Empty List", "No items recorded in the 3-Day Sales Check List to print.");
+            return;
+        }
+
+        const now = new Date();
+        const date2Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2);
+        const dateYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        const dateToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        const formatDate = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}`;
+
+        const htmlRows = threeDaySales.map((item, idx) => `
+          <tr>
+            <td colspan="4" style="padding: 10px 0 2px 0; text-align: left; font-size: 34px; font-weight: 800; line-height: 1.1;">
+              ${idx + 1}. ${item.nameSinhala || item.nameEnglish || item.name}
+            </td>
+          </tr>
+          ${item.nameSinhala && item.nameEnglish && item.nameSinhala !== item.nameEnglish ? `
+          <tr>
+            <td colspan="4" style="padding: 0 0 4px 0; text-align: left; font-size: 26px; color: #555; line-height: 1.0;">
+              (${item.nameEnglish})
+            </td>
+          </tr>` : ''}
+          <tr>
+            <td style="padding: 2px 0 12px 0; text-align: center; font-size: 32px; font-weight: 700; color: #333;">${item.twoDaysQty > 0 ? item.twoDaysQty : '-'}</td>
+            <td style="padding: 2px 0 12px 0; text-align: center; font-size: 32px; font-weight: 700; color: #333;">${item.yestQty > 0 ? item.yestQty : '-'}</td>
+            <td style="padding: 2px 0 12px 0; text-align: center; font-size: 34px; font-weight: 900; color: #000;">${item.todayQty > 0 ? item.todayQty : '-'}</td>
+            <td style="padding: 2px 0 12px 0; text-align: right; font-size: 34px; font-weight: 900; color: #000;">${item.total3DayQty}</td>
+          </tr>
+        `).join('');
+
+        const total2Days = threeDaySales.reduce((sum, item) => sum + (item.twoDaysQty || 0), 0);
+        const totalYest = threeDaySales.reduce((sum, item) => sum + (item.yestQty || 0), 0);
+        const totalToday = threeDaySales.reduce((sum, item) => sum + (item.todayQty || 0), 0);
+        const grandTotal = threeDaySales.reduce((sum, item) => sum + (item.total3DayQty || 0), 0);
+
+        const html = `
+          <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                @page { size: auto; margin: 0; }
+                body { 
+                  width: 100%; 
+                  font-family: sans-serif; 
+                  padding: 8px; 
+                  color: #000;
+                  text-align: center;
+                  -webkit-print-color-adjust: exact;
+                }
+                .title { font-size: 48px; font-weight: 900; margin-bottom: 4px; }
+                .sub { font-size: 30px; font-weight: 700; margin-bottom: 4px; color: #111; }
+                .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
+                .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
+                .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                .table th { 
+                  font-size: 28px; 
+                  font-weight: 900; 
+                  padding: 10px 2px; 
+                  background-color: #222; 
+                  color: #FFF !important; 
+                  text-align: center;
+                  line-height: 1.1;
+                }
+                .summary-table { width: 100%; font-size: 32px; font-weight: 800; border-collapse: collapse; margin: 15px 0; text-align: left; }
+                .summary-table td { padding: 6px 0; }
+                .footer { font-size: 24px; font-weight: 700; margin-top: 18px; color: #444; }
+              </style>
+            </head>
+            <body>
+              <div class="title">Dilki Distributors</div>
+              <div class="sub">3-Day Sales Check List</div>
+              <div class="sub">${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+              
+              <div class="solid-divider"></div>
+
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th style="width: 25%; text-align: center;">${formatDate(date2Days)}<br/>(2 Days)</th>
+                    <th style="width: 25%; text-align: center;">${formatDate(dateYest)}<br/>(ඊයේ)</th>
+                    <th style="width: 25%; text-align: center;">${formatDate(dateToday)}<br/>(අද)</th>
+                    <th style="width: 25%; text-align: right;">එකතුව<br/>(Total)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${htmlRows}
+                </tbody>
+              </table>
+
+              <div class="divider"></div>
+
+              <table class="summary-table">
+                <tr>
+                  <td>අයිතම වර්ග ගණන :</td>
+                  <td style="text-align: right;">${threeDaySales.length}</td>
+                </tr>
+                <tr>
+                  <td>දින 2කට පෙර මුළු ඒකක :</td>
+                  <td style="text-align: right;">${total2Days}</td>
+                </tr>
+                <tr>
+                  <td>ඊයේ මුළු ඒකක :</td>
+                  <td style="text-align: right;">${totalYest}</td>
+                </tr>
+                <tr>
+                  <td style="color: #000; font-weight: 900;">අද මුළු ඒකක :</td>
+                  <td style="text-align: right; color: #000; font-weight: 900;">${totalToday}</td>
+                </tr>
+                <tr style="border-top: 3px solid #000;">
+                  <td style="font-size: 36px; font-weight: 1000; padding-top: 10px;">දින 3 මුළු එකතුව :</td>
+                  <td style="text-align: right; font-size: 36px; font-weight: 1000; padding-top: 10px;">${grandTotal}</td>
+                </tr>
+              </table>
+
+              <div class="solid-divider"></div>
+
+              <div class="footer">
+                Dilki Distributors - Maspotha<br/>
+                Develop & Designed by ZipZipy
+              </div>
+            </body>
+          </html>
+        `;
+
+        try {
+            const { uri } = await Print.printToFileAsync({ html, width: 560 });
+            await Sharing.shareAsync(uri, {
+                mimeType: 'application/pdf',
+                dialogTitle: 'Print 3-Day List with 4Barcode',
+                UTI: 'com.adobe.pdf'
+            });
+        } catch (error) {
+            Alert.alert("Print Error", "Could not generate or share print document.");
+        }
     };
 
     useFocusEffect(
@@ -424,8 +590,18 @@ export default function SummaryScreen() {
             {/* 3-Day Sales Check List Card (Page Bottom) */}
             <View style={styles.checklistCard}>
                 <View style={styles.checklistHeader}>
-                    <Ionicons name="list-circle" size={24} color={isDark ? "#60A5FA" : "#3B82F6"} style={{ marginRight: 8 }} />
-                    <Text style={styles.checklistTitle}>3-Day Sales Check List</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                        <Ionicons name="list-circle" size={24} color={isDark ? "#60A5FA" : "#3B82F6"} style={{ marginRight: 8 }} />
+                        <Text style={styles.checklistTitle}>3-Day Sales Check List</Text>
+                    </View>
+                    <TouchableOpacity
+                        style={styles.printChecklistBtn}
+                        onPress={handlePrintChecklist}
+                        activeOpacity={0.8}
+                    >
+                        <Ionicons name="print-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
+                        <Text style={styles.printChecklistBtnText}>Print List</Text>
+                    </TouchableOpacity>
                 </View>
 
                 <View style={styles.tableHeaderRow}>
@@ -438,9 +614,16 @@ export default function SummaryScreen() {
                 {threeDaySales.length > 0 ? (
                     threeDaySales.map((item, idx) => (
                         <View key={item.id || idx} style={styles.tableRow}>
-                            <Text style={[styles.productNameText, { flex: 2.5 }]} numberOfLines={1}>
-                                {item.name}
-                            </Text>
+                            <View style={{ flex: 2.5, paddingRight: 6 }}>
+                                <Text style={styles.productNameText} numberOfLines={1}>
+                                    {item.nameSinhala || item.name}
+                                </Text>
+                                {item.nameSinhala && item.nameEnglish && item.nameSinhala !== item.nameEnglish ? (
+                                    <Text style={styles.productSubNameText} numberOfLines={1}>
+                                        {item.nameEnglish}
+                                    </Text>
+                                ) : null}
+                            </View>
                             <Text style={[styles.qtyText, { flex: 1.2, textAlign: 'center' }]}>
                                 {item.twoDaysQty > 0 ? item.twoDaysQty : '-'}
                             </Text>
@@ -690,12 +873,30 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
     checklistHeader: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
         marginBottom: 16,
     },
     checklistTitle: {
         fontSize: 16,
         fontWeight: 'bold',
         color: isDark ? '#F9FAFB' : '#111827',
+    },
+    printChecklistBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#3B82F6',
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+        borderRadius: 10,
+        shadowColor: '#3B82F6',
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    printChecklistBtnText: {
+        color: '#FFF',
+        fontSize: 13,
+        fontWeight: '700',
     },
     tableHeaderRow: {
         flexDirection: 'row',
@@ -721,6 +922,11 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
         fontSize: 14,
         fontWeight: '600',
         color: isDark ? '#F9FAFB' : '#111827',
+    },
+    productSubNameText: {
+        fontSize: 11,
+        color: isDark ? '#9CA3AF' : '#6B7280',
+        marginTop: 2,
     },
     qtyText: {
         fontSize: 14,

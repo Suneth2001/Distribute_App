@@ -1,4 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useColorScheme, Platform } from 'react-native';
@@ -166,6 +168,137 @@ export default function HistoryScreen() {
                 }
             ]
         );
+    };
+
+    const handleReprint = async (transaction: any) => {
+        if (!transaction) return;
+
+        const htmlLines = transaction.items.map((i: any, index: number) => `
+          <tr>
+            <td colspan="4" style="padding: 8px 0 2px 0; text-align: left; font-size: 38px; line-height: 1.1;">
+                ${index + 1}. ${i.nameSinhala || i.nameEnglish}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 0 0 12px 0; text-align: left; font-size: 34px; line-height: 1.0; font-weight: 700;">${i.qty}</td>
+            <td style="padding: 0 0 12px 0; text-align: center; font-size: 34px; line-height: 1.0;">${parseFloat(i.marketPrice || i.unitPrice || 0).toFixed(2)}</td>
+            <td style="padding: 0 0 12px 0; text-align: center; font-size: 34px; line-height: 1.0;">${parseFloat(i.unitPrice || 0).toFixed(2)}</td>
+            <td style="padding: 0 0 12px 0; text-align: right; font-size: 34px; font-weight: 900; line-height: 1.0;">${parseFloat(i.totalPrice || 0).toFixed(2)}</td>
+          </tr>
+        `).join('');
+
+        const discountAmt = transaction.discount || 0;
+        const paid = transaction.paidAmount || 0;
+
+        const html = `
+          <html>
+            <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <style>
+                  * { box-sizing: border-box; margin: 0; padding: 0; }
+                  @page { size: auto; margin: 0; }
+                  html, body {
+                    width: 100%;
+                    margin: 0;
+                    padding: 0;
+                    color: #000;
+                    font-family: sans-serif;
+                    -webkit-print-color-adjust: exact;
+                    line-height: 1.0;
+                  }
+                  body { text-align: center; padding: 0 4px; }
+                  .header-title { font-size: 60px; font-weight: 900; margin: 5px 0 0 0; line-height: 1.0; }
+                  .header-sub { font-size: 34px; margin: 4px 0; font-weight: 700; }
+                  .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
+                  .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
+                  .info-table { width: 100%; font-size: 34px; text-align: left; margin: 5px 0; font-weight: 700; border-collapse: collapse; }
+                  .info-table td { padding: 6px 0; line-height: 1.1; }
+                  .items-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+                  .items-table thead tr { background-color: #333; color: #fff; }
+                  .items-table th { padding: 12px 4px; font-weight: 900; font-size: 32px; text-align: center; color: #fff !important; }
+                  .summary-table { width: 100%; font-size: 38px; text-align: left; margin: 25px 0; font-weight: 800; border-collapse: collapse; }
+                  .summary-table td { padding: 8px 0; line-height: 1.1; }
+                  .footer { text-align: center; font-size: 34px; margin-top: 15px; line-height: 1.2; font-weight: 700; }
+                  .notice { font-size: 26px; font-weight: 800; margin: 10px 0; border-top: 2px solid #000; padding-top: 8px; }
+                  .brand { font-size: 22px; color: #333; margin-top: 12px; font-weight: normal; line-height: 1.1; }
+              </style>
+            </head>
+            <body>
+              <div class="header-title">Dilki Distributors</div>
+              <div class="header-sub">Rathkarawwa, Maspotha</div>
+              <div class="header-sub">072 3272457 / 076 1773163</div>
+              
+              <div class="divider"></div>
+              
+              <table class="info-table">
+                <tr>
+                  <td>බිල් අංකය :</td>
+                  <td style="text-align: right;">${transaction.id}</td>
+                </tr>
+                <tr>
+                  <td>ගනුදෙනුකරු :</td>
+                  <td style="text-align: right;">${transaction.shopName}</td>
+                </tr>
+                <tr>
+                  <td>දිනය සහ වේලාව :</td>
+                  <td style="text-align: right;">${new Date(transaction.date).toLocaleString()}</td>
+                </tr>
+              </table>
+              
+              <div class="solid-divider"></div>
+
+              <table class="items-table">
+                <thead>
+                  <tr>
+                    <th style="text-align: left;">ප්‍රමාණය</th>
+                    <th style="text-align: center;">සඳහන් මිල</th>
+                    <th style="text-align: center;">අපේ මිල</th>
+                    <th style="text-align: right;">එකතුව</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${htmlLines}
+                </tbody>
+              </table>
+              
+              <div class="divider"></div>
+              
+              <table class="summary-table">
+                <tr>
+                  <td>මුළු එකතුව</td>
+                  <td style="text-align: right;">රු. ${parseFloat(transaction.total).toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td>ගෙවූ මුදල</td>
+                  <td style="text-align: right;">රු. ${paid.toFixed(2)}</td>
+                </tr>
+              </table>
+              
+              <div class="solid-divider"></div>
+              
+              <div class="footer">
+                <div class="notice">
+                  ඔබගේ විශ්වාසයට ස්තූති!<br/>
+                </div>
+                <div class="brand">
+                  Develop & Designed by ZipZipy<br/>
+                  076 659 5714
+                </div>
+              </div>
+            </body>
+          </html>
+        `;
+
+        try {
+            const { uri } = await Print.printToFileAsync({ html, width: 560 });
+            await Sharing.shareAsync(uri, {
+                mimeType: 'application/pdf',
+                dialogTitle: 'Print Receipt with 4Barcode',
+                UTI: 'com.adobe.pdf'
+            });
+        } catch (error) {
+            Alert.alert('Print Error', 'Could not open print manager');
+        }
     };
 
     const isOlderThan30Days = (dateStr: string) => {
@@ -348,6 +481,27 @@ export default function HistoryScreen() {
                                     <Text style={styles.summaryTotalValue}>Rs {selectedBill.total?.toFixed(2)}</Text>
                                 </View>
                             </View>
+
+                            <TouchableOpacity 
+                                style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    backgroundColor: '#10B981',
+                                    paddingVertical: 14,
+                                    borderRadius: 14,
+                                    marginTop: 20,
+                                    shadowColor: '#10B981',
+                                    shadowOpacity: 0.3,
+                                    shadowRadius: 5,
+                                    elevation: 3
+                                }}
+                                onPress={() => handleReprint(selectedBill)}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons name="print-outline" size={20} color="#FFF" style={{ marginRight: 8 }} />
+                                <Text style={{ color: '#FFF', fontSize: 16, fontWeight: 'bold' }}>Print Receipt (4Barcode)</Text>
+                            </TouchableOpacity>
                         </ScrollView>
                     )}
 
