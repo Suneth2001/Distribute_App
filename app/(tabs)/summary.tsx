@@ -1,7 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Dimensions, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
+import {
+    Dimensions,
+    Modal,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+    useColorScheme
+} from 'react-native';
 import { BarChart, PieChart } from 'react-native-chart-kit';
 import { getExpenses, getProducts, getTransactions } from '../../src/store/database';
 
@@ -14,6 +24,13 @@ interface ThreeDayItem {
     total3DayQty: number;
 }
 
+const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 export default function SummaryScreen() {
     const isDark = useColorScheme() === 'dark';
     const styles = getStyles(isDark);
@@ -23,7 +40,10 @@ export default function SummaryScreen() {
     const [expenses, setExpensesState] = useState(0);
     const [topItems, setTopItems] = useState<any[]>([]);
     const [threeDaySales, setThreeDaySales] = useState<ThreeDayItem[]>([]);
-    const [filter, setFilter] = useState<'today' | 'week' | 'month' | 'all'>('all');
+    const [filter, setFilter] = useState<'today' | 'yesterday' | 'week' | 'month' | 'custom'>('today');
+    const [customDate, setCustomDate] = useState<Date>(new Date());
+    const [calendarViewDate, setCalendarViewDate] = useState<Date>(new Date());
+    const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
 
     const loadData = async () => {
@@ -33,9 +53,13 @@ export default function SummaryScreen() {
         const allProducts = await getProducts();
 
         const now = new Date();
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-        // Calculate start of week (Sunday)
+        const startOfYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
+        const endOfYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
+
+        // Start of week (Sunday)
         const tempDate = new Date(now);
         const diff = tempDate.getDate() - tempDate.getDay();
         const startOfWeek = new Date(tempDate.setDate(diff));
@@ -43,20 +67,27 @@ export default function SummaryScreen() {
 
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
 
+        // Custom Date range
+        const startOfCustom = new Date(customDate.getFullYear(), customDate.getMonth(), customDate.getDate(), 0, 0, 0, 0);
+        const endOfCustom = new Date(customDate.getFullYear(), customDate.getMonth(), customDate.getDate(), 23, 59, 59, 999);
+
+        const isDateInFilter = (d: Date) => {
+            if (filter === 'today') return d >= startOfToday && d <= endOfToday;
+            if (filter === 'yesterday') return d >= startOfYest && d <= endOfYest;
+            if (filter === 'week') return d >= startOfWeek;
+            if (filter === 'month') return d >= startOfMonth;
+            if (filter === 'custom') return d >= startOfCustom && d <= endOfCustom;
+            return true;
+        };
+
         const filteredTrans = trans.filter(t => {
             const tDate = new Date(t.date);
-            if (filter === 'today') return tDate >= startOfDay;
-            if (filter === 'week') return tDate >= startOfWeek;
-            if (filter === 'month') return tDate >= startOfMonth;
-            return true;
+            return !isNaN(tDate.getTime()) && isDateInFilter(tDate);
         });
 
         const filteredExps = exps.filter(e => {
             const eDate = new Date(e.date);
-            if (filter === 'today') return eDate >= startOfDay;
-            if (filter === 'week') return eDate >= startOfWeek;
-            if (filter === 'month') return eDate >= startOfMonth;
-            return true;
+            return !isNaN(eDate.getTime()) && isDateInFilter(eDate);
         });
 
         let tSales = 0;
@@ -91,12 +122,6 @@ export default function SummaryScreen() {
         });
 
         // --- 3-Day Sales Check List Calculation ---
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-
-        const startOfYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
-        const endOfYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
-
         const startOf2Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2, 0, 0, 0, 0);
         const endOf2Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2, 23, 59, 59, 999);
 
@@ -162,12 +187,11 @@ export default function SummaryScreen() {
     useFocusEffect(
         useCallback(() => {
             loadData();
-        }, [filter])
+        }, [filter, customDate])
     );
 
     const profitFromGoods = sales - costs;
     const netProfit = profitFromGoods - expenses;
-
     const screenWidth = Dimensions.get("window").width;
 
     const chartConfig = {
@@ -185,6 +209,34 @@ export default function SummaryScreen() {
         { name: "Profit", population: Math.max(0, netProfit), color: "#10B981", legendFontColor: isDark ? "#9CA3AF" : "#4B5563", legendFontSize: 12 }
     ];
 
+    // Calendar Helper Functions
+    const calYear = calendarViewDate.getFullYear();
+    const calMonth = calendarViewDate.getMonth();
+    const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+    const firstDayOfWeek = new Date(calYear, calMonth, 1).getDay();
+
+    const changeMonth = (offset: number) => {
+        setCalendarViewDate(new Date(calYear, calMonth + offset, 1));
+    };
+
+    const handleSelectDay = (day: number) => {
+        const selected = new Date(calYear, calMonth, day);
+        setCustomDate(selected);
+        setFilter('custom');
+        setIsDatePickerVisible(false);
+    };
+
+    const getFilterSubtitle = () => {
+        if (filter === 'today') return 'Summary for Today';
+        if (filter === 'yesterday') return 'Summary for Yesterday';
+        if (filter === 'week') return 'Summary for This Week';
+        if (filter === 'month') return 'Summary for This Month';
+        if (filter === 'custom') {
+            return `Summary for ${customDate.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`;
+        }
+        return 'Financial Summary Overview';
+    };
+
     return (
         <ScrollView
             style={styles.container}
@@ -193,23 +245,76 @@ export default function SummaryScreen() {
         >
             <View style={styles.header}>
                 <Text style={styles.headerTitle}>Financial Summary</Text>
-                <Text style={styles.headerSubtitle}>Overview of all recorded transactions</Text>
+                <Text style={styles.headerSubtitle}>{getFilterSubtitle()}</Text>
             </View>
 
-            {/* Filter Section */}
+            {/* Date Range Filter Section */}
             <View style={styles.filterContainer}>
-                {(['today', 'week', 'month', 'all'] as const).map((f) => (
-                    <TouchableOpacity
-                        key={f}
-                        style={[styles.filterBtn, filter === f && styles.filterBtnActive]}
-                        onPress={() => setFilter(f)}
-                    >
-                        <Text style={[styles.filterBtnText, filter === f && styles.filterBtnTextActive]}>
-                            {f.charAt(0).toUpperCase() + f.slice(1)}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
+                <TouchableOpacity
+                    style={[styles.filterBtn, filter === 'today' && styles.filterBtnActive]}
+                    onPress={() => setFilter('today')}
+                >
+                    <Text style={[styles.filterBtnText, filter === 'today' && styles.filterBtnTextActive]}>Today</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.filterBtn, filter === 'yesterday' && styles.filterBtnActive]}
+                    onPress={() => setFilter('yesterday')}
+                >
+                    <Text style={[styles.filterBtnText, filter === 'yesterday' && styles.filterBtnTextActive]}>Yesterday</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.filterBtn, filter === 'week' && styles.filterBtnActive]}
+                    onPress={() => setFilter('week')}
+                >
+                    <Text style={[styles.filterBtnText, filter === 'week' && styles.filterBtnTextActive]}>Week</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.filterBtn, filter === 'month' && styles.filterBtnActive]}
+                    onPress={() => setFilter('month')}
+                >
+                    <Text style={[styles.filterBtnText, filter === 'month' && styles.filterBtnTextActive]}>Month</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={[styles.filterBtn, filter === 'custom' && styles.filterBtnActive, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }]}
+                    onPress={() => {
+                        setCalendarViewDate(new Date(customDate));
+                        setIsDatePickerVisible(true);
+                    }}
+                >
+                    <Ionicons
+                        name="calendar-outline"
+                        size={13}
+                        color={filter === 'custom' ? '#FFF' : (isDark ? '#9CA3AF' : '#6B7280')}
+                        style={{ marginRight: 3 }}
+                    />
+                    <Text style={[styles.filterBtnText, filter === 'custom' && styles.filterBtnTextActive]}>
+                        {filter === 'custom' ? customDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'Date'}
+                    </Text>
+                </TouchableOpacity>
             </View>
+
+            {/* Custom Date Info Bar */}
+            {filter === 'custom' && (
+                <View style={styles.customDateInfoBar}>
+                    <Ionicons name="time-outline" size={16} color="#3B82F6" style={{ marginRight: 6 }} />
+                    <Text style={styles.customDateInfoText}>
+                        Selected Date: <Text style={{ fontWeight: 'bold' }}>{customDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</Text>
+                    </Text>
+                    <TouchableOpacity
+                        style={styles.changeDateBtn}
+                        onPress={() => {
+                            setCalendarViewDate(new Date(customDate));
+                            setIsDatePickerVisible(true);
+                        }}
+                    >
+                        <Text style={styles.changeDateBtnText}>Change</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             {/* Quick Stats Grid */}
             <View style={styles.statsGrid}>
@@ -233,10 +338,10 @@ export default function SummaryScreen() {
                 </View>
             </View>
 
-            {/* Revenue vs Profit Bar Chart */}
+            {/* Performance Analysis Bar Chart */}
             <View style={styles.chartContainer}>
                 <View style={styles.chartHeader}>
-                    <Text style={styles.chartTitle}>Revenue vs Profit Analysis</Text>
+                    <Text style={styles.chartTitle}>Performance Analysis</Text>
                     <View style={[styles.statusBadge, { backgroundColor: netProfit > 0 ? '#D1FAE5' : '#FEE2E2' }]}>
                         <Text style={[styles.statusText, { color: netProfit > 0 ? '#065F46' : '#991B1B' }]}>
                             {netProfit > 0 ? 'Healthy' : 'Action Needed'}
@@ -353,6 +458,119 @@ export default function SummaryScreen() {
             </View>
 
             <View style={{ height: 40 }} />
+
+            {/* Interactive Date Chooser Modal */}
+            <Modal
+                visible={isDatePickerVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setIsDatePickerVisible(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setIsDatePickerVisible(false)}
+                >
+                    <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Choose Summary Date</Text>
+                            <TouchableOpacity onPress={() => setIsDatePickerVisible(false)}>
+                                <Ionicons name="close" size={24} color={isDark ? '#9CA3AF' : '#6B7280'} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Month / Year Navigator */}
+                        <View style={styles.calMonthNav}>
+                            <TouchableOpacity style={styles.calNavBtn} onPress={() => changeMonth(-1)}>
+                                <Ionicons name="chevron-back" size={22} color={isDark ? '#F9FAFB' : '#111827'} />
+                            </TouchableOpacity>
+                            <Text style={styles.calMonthText}>
+                                {MONTH_NAMES[calMonth]} {calYear}
+                            </Text>
+                            <TouchableOpacity style={styles.calNavBtn} onPress={() => changeMonth(1)}>
+                                <Ionicons name="chevron-forward" size={22} color={isDark ? '#F9FAFB' : '#111827'} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Day Names Header */}
+                        <View style={styles.calDayNamesRow}>
+                            {DAY_NAMES.map((d, i) => (
+                                <Text key={i} style={[styles.calDayNameText, i === 0 && { color: '#EF4444' }]}>
+                                    {d}
+                                </Text>
+                            ))}
+                        </View>
+
+                        {/* Calendar Days Grid */}
+                        <View style={styles.calGrid}>
+                            {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                                <View key={`empty-${i}`} style={styles.calDayCell} />
+                            ))}
+                            {Array.from({ length: daysInMonth }).map((_, i) => {
+                                const dayNum = i + 1;
+                                const isSelected =
+                                    filter === 'custom' &&
+                                    customDate.getDate() === dayNum &&
+                                    customDate.getMonth() === calMonth &&
+                                    customDate.getFullYear() === calYear;
+
+                                const isTodayDate =
+                                    new Date().getDate() === dayNum &&
+                                    new Date().getMonth() === calMonth &&
+                                    new Date().getFullYear() === calYear;
+
+                                return (
+                                    <TouchableOpacity
+                                        key={`day-${dayNum}`}
+                                        style={[
+                                            styles.calDayCell,
+                                            isSelected && styles.calDayCellSelected,
+                                            !isSelected && isTodayDate && styles.calDayCellToday
+                                        ]}
+                                        onPress={() => handleSelectDay(dayNum)}
+                                    >
+                                        <Text style={[
+                                            styles.calDayText,
+                                            isSelected && styles.calDayTextSelected,
+                                            !isSelected && isTodayDate && styles.calDayTextToday
+                                        ]}>
+                                            {dayNum}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+
+                        {/* Quick Shortcuts */}
+                        <View style={styles.calQuickRow}>
+                            <TouchableOpacity
+                                style={styles.calQuickBtn}
+                                onPress={() => {
+                                    const t = new Date();
+                                    setCustomDate(t);
+                                    setFilter('today');
+                                    setIsDatePickerVisible(false);
+                                }}
+                            >
+                                <Text style={styles.calQuickBtnText}>Today</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.calQuickBtn}
+                                onPress={() => {
+                                    const y = new Date();
+                                    y.setDate(y.getDate() - 1);
+                                    setCustomDate(y);
+                                    setFilter('yesterday');
+                                    setIsDatePickerVisible(false);
+                                }}
+                            >
+                                <Text style={styles.calQuickBtnText}>Yesterday</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
         </ScrollView>
     );
 }
@@ -363,16 +581,63 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
     headerTitle: { fontSize: 26, fontWeight: '900', color: isDark ? '#F9FAFB' : '#111827', letterSpacing: -0.5 },
     headerSubtitle: { fontSize: 14, color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 4, fontWeight: '500' },
 
-    filterContainer: { flexDirection: 'row', backgroundColor: isDark ? '#1F2937' : '#FFF', padding: 8, margin: 16, borderRadius: 12, borderWidth: 1, borderColor: isDark ? '#374151' : '#E5E7EB' },
-    filterBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
+    filterContainer: {
+        flexDirection: 'row',
+        backgroundColor: isDark ? '#1F2937' : '#FFF',
+        padding: 6,
+        marginHorizontal: 16,
+        marginTop: 16,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: isDark ? '#374151' : '#E5E7EB',
+        justifyContent: 'space-between'
+    },
+    filterBtn: {
+        flex: 1,
+        paddingVertical: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 8,
+        marginHorizontal: 2
+    },
     filterBtnActive: { backgroundColor: '#3B82F6' },
-    filterBtnText: { fontSize: 12, color: isDark ? '#9CA3AF' : '#6B7280', fontWeight: 'bold' },
+    filterBtnText: { fontSize: 11, color: isDark ? '#9CA3AF' : '#6B7280', fontWeight: 'bold' },
     filterBtnTextActive: { color: '#FFF' },
+
+    customDateInfoBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE',
+        marginHorizontal: 16,
+        marginTop: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 8,
+    },
+    customDateInfoText: {
+        fontSize: 12,
+        color: isDark ? '#DBEAFE' : '#1E40AF',
+        flex: 1,
+    },
+    changeDateBtn: {
+        backgroundColor: '#3B82F6',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 6,
+        marginLeft: 8,
+    },
+    changeDateBtnText: {
+        color: '#FFF',
+        fontSize: 11,
+        fontWeight: 'bold',
+    },
 
     statsGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         paddingHorizontal: 16,
+        marginTop: 12,
         justifyContent: 'space-between'
     },
     gridCard: {
@@ -402,6 +667,14 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
 
     insightBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: isDark ? '#374151' : '#F3F4F6', padding: 12, borderRadius: 12, marginBottom: 16 },
     insightText: { fontSize: 13, color: isDark ? '#D1D5DB' : '#4B5563', marginLeft: 4 },
+
+    topItemsContainer: { backgroundColor: isDark ? '#1F2937' : '#FFF', padding: 16, marginHorizontal: 16, marginTop: 12, borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 3 },
+    topItemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: isDark ? '#374151' : '#F3F4F6' },
+    itemRank: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#3B82F6', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+    rankText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
+    itemName: { fontSize: 14, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#111827' },
+    itemSubText: { fontSize: 11, color: isDark ? '#9CA3AF' : '#6B7280' },
+    itemTotal: { fontSize: 14, fontWeight: 'bold', color: isDark ? '#60A5FA' : '#3B82F6' },
 
     checklistCard: {
         backgroundColor: isDark ? '#1F2937' : '#FFF',
@@ -466,11 +739,121 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
         fontSize: 13,
     },
 
-    topItemsContainer: { backgroundColor: isDark ? '#1F2937' : '#FFF', padding: 16, marginHorizontal: 16, marginTop: 12, borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 3 },
-    topItemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: isDark ? '#374151' : '#F3F4F6' },
-    itemRank: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#3B82F6', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-    rankText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
-    itemName: { fontSize: 14, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#111827' },
-    itemSubText: { fontSize: 11, color: isDark ? '#9CA3AF' : '#6B7280' },
-    itemTotal: { fontSize: 14, fontWeight: 'bold', color: isDark ? '#60A5FA' : '#3B82F6' }
+    // --- Modal & Calendar Styles ---
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20
+    },
+    modalCard: {
+        width: '100%',
+        maxWidth: 380,
+        backgroundColor: isDark ? '#1F2937' : '#FFF',
+        borderRadius: 20,
+        padding: 20,
+        shadowColor: '#000',
+        shadowOpacity: 0.25,
+        shadowRadius: 10,
+        elevation: 10,
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderColor: isDark ? '#374151' : '#F3F4F6'
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: isDark ? '#F9FAFB' : '#111827'
+    },
+    calMonthNav: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+        paddingHorizontal: 8
+    },
+    calNavBtn: {
+        padding: 8,
+        borderRadius: 8,
+        backgroundColor: isDark ? '#374151' : '#F3F4F6'
+    },
+    calMonthText: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: isDark ? '#F9FAFB' : '#111827'
+    },
+    calDayNamesRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        marginBottom: 10,
+        borderBottomWidth: 1,
+        borderColor: isDark ? '#374151' : '#F3F4F6',
+        paddingBottom: 6
+    },
+    calDayNameText: {
+        width: 36,
+        textAlign: 'center',
+        fontSize: 12,
+        fontWeight: '700',
+        color: isDark ? '#9CA3AF' : '#6B7280'
+    },
+    calGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-start'
+    },
+    calDayCell: {
+        width: `${100 / 7}%`,
+        height: 40,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginVertical: 2,
+        borderRadius: 8
+    },
+    calDayCellSelected: {
+        backgroundColor: '#3B82F6'
+    },
+    calDayCellToday: {
+        borderWidth: 1,
+        borderColor: '#3B82F6'
+    },
+    calDayText: {
+        fontSize: 14,
+        color: isDark ? '#F9FAFB' : '#111827',
+        fontWeight: '500'
+    },
+    calDayTextSelected: {
+        color: '#FFF',
+        fontWeight: 'bold'
+    },
+    calDayTextToday: {
+        color: '#3B82F6',
+        fontWeight: 'bold'
+    },
+    calQuickRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        marginTop: 16,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderColor: isDark ? '#374151' : '#F3F4F6'
+    },
+    calQuickBtn: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 8,
+        backgroundColor: isDark ? '#374151' : '#F3F4F6'
+    },
+    calQuickBtnText: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        color: isDark ? '#60A5FA' : '#3B82F6'
+    }
 });

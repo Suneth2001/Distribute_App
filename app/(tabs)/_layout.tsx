@@ -1,9 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { useColorScheme } from 'react-native';
+import { useColorScheme, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TabLayout() {
     const isDark = useColorScheme() === 'dark';
+    const insets = useSafeAreaInsets();
+
+    // Ensure the tab bar is never covered by the Android system navigation bar (3-button or pill)
+    const bottomPadding = Math.max(insets.bottom, Platform.OS === 'android' ? 14 : 8);
+    const tabBarHeight = 58 + bottomPadding;
 
     return (
         <Tabs screenOptions={{
@@ -16,15 +22,22 @@ export default function TabLayout() {
             headerTintColor: isDark ? '#F9FAFB' : '#111827',
             tabBarActiveTintColor: isDark ? '#60A5FA' : '#3B82F6',
             tabBarInactiveTintColor: isDark ? '#9CA3AF' : '#6B7280',
+            tabBarItemStyle: {
+                paddingVertical: 4,
+            },
+            tabBarLabelStyle: {
+                fontSize: 11,
+                fontWeight: '600',
+            },
             tabBarStyle: {
                 backgroundColor: isDark ? '#1F2937' : '#FFF',
                 elevation: 8,
                 shadowColor: '#000',
                 borderTopColor: isDark ? '#374151' : '#E5E7EB',
                 borderTopWidth: 1,
-                height: 75,
-                paddingBottom: 20,
-                paddingTop: 10
+                height: tabBarHeight,
+                paddingBottom: bottomPadding,
+                paddingTop: 6,
             }
         }}>
             <Tabs.Screen

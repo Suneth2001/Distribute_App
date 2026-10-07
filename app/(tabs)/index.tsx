@@ -842,7 +842,7 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
         flex: 1,
         backgroundColor: isDark ? '#1F2937' : '#FFF',
         marginHorizontal: 12,
-        marginBottom: 100, // accommodate bottom bar
+        marginBottom: 8,
         borderRadius: 16,
         borderWidth: 1,
         borderColor: isDark ? '#374151' : '#E2E8F0',
@@ -909,23 +909,18 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
     },
 
     cartFooter: {
-        position: 'absolute',
-        bottom: 75, // Lifted above the new taller tab bar 
-        left: 0,
-        right: 0,
         backgroundColor: isDark ? '#1F2937' : '#FFF',
         paddingHorizontal: 16,
         paddingVertical: 12,
-        paddingBottom: 15, // Reduced since it's already lifted 
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
         borderTopWidth: 1,
         borderColor: isDark ? '#374151' : '#E5E7EB',
-        elevation: 15,
+        elevation: 8,
         shadowColor: '#000',
-        shadowOpacity: 0.1,
-        shadowRadius: 8
+        shadowOpacity: 0.06,
+        shadowRadius: 4
     },
     totalText: { fontSize: 20, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#111827' },
     itemsLabel: { fontSize: 13, color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 2 },
