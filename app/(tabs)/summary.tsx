@@ -49,6 +49,7 @@ export default function SummaryScreen() {
     const [customDate, setCustomDate] = useState<Date>(new Date());
     const [calendarViewDate, setCalendarViewDate] = useState<Date>(new Date());
     const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
+    const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
 
     const loadData = async () => {
@@ -210,11 +211,8 @@ export default function SummaryScreen() {
         setRefreshing(false);
     };
 
-    const handlePrintChecklist = async () => {
-        if (threeDaySales.length === 0) {
-            Alert.alert("Empty List", "No items recorded in the 3-Day Sales Check List to print.");
-            return;
-        }
+    const handlePrintOption = async (mode: 'all' | 'today' | 'yesterday' | '2days') => {
+        setIsPrintModalVisible(false);
 
         const now = new Date();
         const date2Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2);
@@ -223,32 +221,190 @@ export default function SummaryScreen() {
 
         const formatDate = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}`;
 
-        const htmlRows = threeDaySales.map((item, idx) => `
+        if (mode === 'all') {
+            if (threeDaySales.length === 0) {
+                Alert.alert("Empty List", "No items recorded in the 3-Day Sales Check List to print.");
+                return;
+            }
+
+            const htmlRows = threeDaySales.map((item, idx) => `
+              <tr>
+                <td colspan="4" style="padding: 10px 0 2px 0; text-align: left; font-size: 34px; font-weight: 800; line-height: 1.1;">
+                  ${idx + 1}. ${item.nameSinhala || item.nameEnglish || item.name}
+                </td>
+              </tr>
+              ${item.nameSinhala && item.nameEnglish && item.nameSinhala !== item.nameEnglish ? `
+              <tr>
+                <td colspan="4" style="padding: 0 0 4px 0; text-align: left; font-size: 26px; color: #555; line-height: 1.0;">
+                  (${item.nameEnglish})
+                </td>
+              </tr>` : ''}
+              <tr>
+                <td style="padding: 2px 0 12px 0; text-align: center; font-size: 32px; font-weight: 700; color: #333;">${item.twoDaysQty > 0 ? item.twoDaysQty : '-'}</td>
+                <td style="padding: 2px 0 12px 0; text-align: center; font-size: 32px; font-weight: 700; color: #333;">${item.yestQty > 0 ? item.yestQty : '-'}</td>
+                <td style="padding: 2px 0 12px 0; text-align: center; font-size: 34px; font-weight: 900; color: #000;">${item.todayQty > 0 ? item.todayQty : '-'}</td>
+                <td style="padding: 2px 0 12px 0; text-align: right; font-size: 34px; font-weight: 900; color: #000;">${item.total3DayQty}</td>
+              </tr>
+            `).join('');
+
+            const total2Days = threeDaySales.reduce((sum, item) => sum + (item.twoDaysQty || 0), 0);
+            const totalYest = threeDaySales.reduce((sum, item) => sum + (item.yestQty || 0), 0);
+            const totalToday = threeDaySales.reduce((sum, item) => sum + (item.todayQty || 0), 0);
+            const grandTotal = threeDaySales.reduce((sum, item) => sum + (item.total3DayQty || 0), 0);
+
+            const html = `
+              <html>
+                <head>
+                  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                  <style>
+                    * { box-sizing: border-box; margin: 0; padding: 0; }
+                    @page { size: auto; margin: 0; }
+                    body { 
+                      width: 100%; 
+                      font-family: sans-serif; 
+                      padding: 8px; 
+                      color: #000;
+                      text-align: center;
+                      -webkit-print-color-adjust: exact;
+                    }
+                    .title { font-size: 48px; font-weight: 900; margin-bottom: 4px; }
+                    .sub { font-size: 30px; font-weight: 700; margin-bottom: 4px; color: #111; }
+                    .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
+                    .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
+                    .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                    .table th { 
+                      font-size: 28px; 
+                      font-weight: 900; 
+                      padding: 10px 2px; 
+                      background-color: #222; 
+                      color: #FFF !important; 
+                      text-align: center;
+                      line-height: 1.1;
+                    }
+                    .summary-table { width: 100%; font-size: 32px; font-weight: 800; border-collapse: collapse; margin: 15px 0; text-align: left; }
+                    .summary-table td { padding: 6px 0; }
+                    .footer { font-size: 24px; font-weight: 700; margin-top: 18px; color: #444; }
+                  </style>
+                </head>
+                <body>
+                  <div class="title">Dilki Distributors</div>
+                  <div class="sub">3-Day Sales Check List</div>
+                  <div class="sub">${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                  
+                  <div class="solid-divider"></div>
+
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th style="width: 25%; text-align: center;">${formatDate(date2Days)}<br/>(2 Days)</th>
+                        <th style="width: 25%; text-align: center;">${formatDate(dateYest)}<br/>(ඊයේ)</th>
+                        <th style="width: 25%; text-align: center;">${formatDate(dateToday)}<br/>(අද)</th>
+                        <th style="width: 25%; text-align: right;">එකතුව<br/>(Total)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${htmlRows}
+                    </tbody>
+                  </table>
+
+                  <div class="divider"></div>
+
+                  <table class="summary-table">
+                    <tr>
+                      <td>අයිතම වර්ග ගණන :</td>
+                      <td style="text-align: right;">${threeDaySales.length}</td>
+                    </tr>
+                    <tr>
+                      <td>දින 2කට පෙර මුළු ඒකක :</td>
+                      <td style="text-align: right;">${total2Days}</td>
+                    </tr>
+                    <tr>
+                      <td>ඊයේ මුළු ඒකක :</td>
+                      <td style="text-align: right;">${totalYest}</td>
+                    </tr>
+                    <tr>
+                      <td style="color: #000; font-weight: 900;">අද මුළු ඒකක :</td>
+                      <td style="text-align: right; color: #000; font-weight: 900;">${totalToday}</td>
+                    </tr>
+                    <tr style="border-top: 3px solid #000;">
+                      <td style="font-size: 36px; font-weight: 1000; padding-top: 10px;">දින 3 මුළු එකතුව :</td>
+                      <td style="text-align: right; font-size: 36px; font-weight: 1000; padding-top: 10px;">${grandTotal}</td>
+                    </tr>
+                  </table>
+
+                  <div class="solid-divider"></div>
+
+                  <div class="footer">
+                    Dilki Distributors - Maspotha<br/>
+                    Develop & Designed by ZipZipy
+                  </div>
+                </body>
+              </html>
+            `;
+
+            try {
+                const { uri } = await Print.printToFileAsync({ html, width: 560 });
+                await Sharing.shareAsync(uri, {
+                    mimeType: 'application/pdf',
+                    dialogTitle: 'Print 3-Day List with 4Barcode',
+                    UTI: 'com.adobe.pdf'
+                });
+            } catch (error) {
+                Alert.alert("Print Error", "Could not generate or share print document.");
+            }
+            return;
+        }
+
+        // Single Day Print Logic (today, yesterday, or 2days)
+        let dayTitle = '';
+        let daySubtitle = '';
+        let dayItems: { item: ThreeDayItem; qty: number }[] = [];
+
+        if (mode === 'today') {
+            dayTitle = 'අද දින විකුණුම් වාර්තාව';
+            daySubtitle = `Today Sales (${formatDate(dateToday)})`;
+            dayItems = threeDaySales
+                .filter(i => i.todayQty > 0)
+                .map(i => ({ item: i, qty: i.todayQty }))
+                .sort((a, b) => b.qty - a.qty);
+        } else if (mode === 'yesterday') {
+            dayTitle = 'ඊයේ දින විකුණුම් වාර්තාව';
+            daySubtitle = `Yesterday Sales (${formatDate(dateYest)})`;
+            dayItems = threeDaySales
+                .filter(i => i.yestQty > 0)
+                .map(i => ({ item: i, qty: i.yestQty }))
+                .sort((a, b) => b.qty - a.qty);
+        } else if (mode === '2days') {
+            dayTitle = 'පෙර දින 2 විකුණුම් වාර්තාව';
+            daySubtitle = `2-Days Ago Sales (${formatDate(date2Days)})`;
+            dayItems = threeDaySales
+                .filter(i => i.twoDaysQty > 0)
+                .map(i => ({ item: i, qty: i.twoDaysQty }))
+                .sort((a, b) => b.qty - a.qty);
+        }
+
+        if (dayItems.length === 0) {
+            Alert.alert("Empty List", `No sales recorded for ${daySubtitle}.`);
+            return;
+        }
+
+        const totalQty = dayItems.reduce((sum, d) => sum + d.qty, 0);
+
+        const dayHtmlRows = dayItems.map((d, idx) => `
           <tr>
-            <td colspan="4" style="padding: 10px 0 2px 0; text-align: left; font-size: 34px; font-weight: 800; line-height: 1.1;">
-              ${idx + 1}. ${item.nameSinhala || item.nameEnglish || item.name}
+            <td style="padding: 10px 4px 6px 0; text-align: left; font-size: 34px; font-weight: 800; line-height: 1.1;">
+              ${idx + 1}. ${d.item.nameSinhala || d.item.nameEnglish || d.item.name}
+              ${d.item.nameSinhala && d.item.nameEnglish && d.item.nameSinhala !== d.item.nameEnglish ? `
+                <div style="font-size: 26px; color: #555; font-weight: 500; margin-top: 2px;">(${d.item.nameEnglish})</div>
+              ` : ''}
             </td>
-          </tr>
-          ${item.nameSinhala && item.nameEnglish && item.nameSinhala !== item.nameEnglish ? `
-          <tr>
-            <td colspan="4" style="padding: 0 0 4px 0; text-align: left; font-size: 26px; color: #555; line-height: 1.0;">
-              (${item.nameEnglish})
+            <td style="padding: 10px 0 6px 4px; text-align: right; font-size: 38px; font-weight: 900; vertical-align: middle;">
+              ${d.qty}
             </td>
-          </tr>` : ''}
-          <tr>
-            <td style="padding: 2px 0 12px 0; text-align: center; font-size: 32px; font-weight: 700; color: #333;">${item.twoDaysQty > 0 ? item.twoDaysQty : '-'}</td>
-            <td style="padding: 2px 0 12px 0; text-align: center; font-size: 32px; font-weight: 700; color: #333;">${item.yestQty > 0 ? item.yestQty : '-'}</td>
-            <td style="padding: 2px 0 12px 0; text-align: center; font-size: 34px; font-weight: 900; color: #000;">${item.todayQty > 0 ? item.todayQty : '-'}</td>
-            <td style="padding: 2px 0 12px 0; text-align: right; font-size: 34px; font-weight: 900; color: #000;">${item.total3DayQty}</td>
           </tr>
         `).join('');
 
-        const total2Days = threeDaySales.reduce((sum, item) => sum + (item.twoDaysQty || 0), 0);
-        const totalYest = threeDaySales.reduce((sum, item) => sum + (item.yestQty || 0), 0);
-        const totalToday = threeDaySales.reduce((sum, item) => sum + (item.todayQty || 0), 0);
-        const grandTotal = threeDaySales.reduce((sum, item) => sum + (item.total3DayQty || 0), 0);
-
-        const html = `
+        const singleDayHtml = `
           <html>
             <head>
               <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -259,72 +415,58 @@ export default function SummaryScreen() {
                   width: 100%; 
                   font-family: sans-serif; 
                   padding: 8px; 
-                  color: #000;
+                  color: #000; 
                   text-align: center;
                   -webkit-print-color-adjust: exact;
                 }
                 .title { font-size: 48px; font-weight: 900; margin-bottom: 4px; }
-                .sub { font-size: 30px; font-weight: 700; margin-bottom: 4px; color: #111; }
+                .sub { font-size: 34px; font-weight: 900; margin-bottom: 4px; color: #000; }
+                .date-sub { font-size: 28px; font-weight: 700; margin-bottom: 4px; color: #333; }
                 .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
                 .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
                 .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
                 .table th { 
-                  font-size: 28px; 
+                  font-size: 30px; 
                   font-weight: 900; 
-                  padding: 10px 2px; 
+                  padding: 10px 4px; 
                   background-color: #222; 
                   color: #FFF !important; 
-                  text-align: center;
                   line-height: 1.1;
                 }
-                .summary-table { width: 100%; font-size: 32px; font-weight: 800; border-collapse: collapse; margin: 15px 0; text-align: left; }
-                .summary-table td { padding: 6px 0; }
+                .summary-box { width: 100%; font-size: 34px; font-weight: 800; border-collapse: collapse; margin: 15px 0; text-align: left; }
+                .summary-box td { padding: 8px 0; }
                 .footer { font-size: 24px; font-weight: 700; margin-top: 18px; color: #444; }
               </style>
             </head>
             <body>
               <div class="title">Dilki Distributors</div>
-              <div class="sub">3-Day Sales Check List</div>
-              <div class="sub">${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+              <div class="sub">${dayTitle}</div>
+              <div class="date-sub">${daySubtitle}</div>
               
               <div class="solid-divider"></div>
 
               <table class="table">
                 <thead>
                   <tr>
-                    <th style="width: 25%; text-align: center;">${formatDate(date2Days)}<br/>(2 Days)</th>
-                    <th style="width: 25%; text-align: center;">${formatDate(dateYest)}<br/>(ඊයේ)</th>
-                    <th style="width: 25%; text-align: center;">${formatDate(dateToday)}<br/>(අද)</th>
-                    <th style="width: 25%; text-align: right;">එකතුව<br/>(Total)</th>
+                    <th style="text-align: left; width: 75%;">අයිතමය (Product)</th>
+                    <th style="text-align: right; width: 25%;">ප්‍රමාණය (Qty)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  ${htmlRows}
+                  ${dayHtmlRows}
                 </tbody>
               </table>
 
               <div class="divider"></div>
 
-              <table class="summary-table">
+              <table class="summary-box">
                 <tr>
-                  <td>අයිතම වර්ග ගණන :</td>
-                  <td style="text-align: right;">${threeDaySales.length}</td>
-                </tr>
-                <tr>
-                  <td>දින 2කට පෙර මුළු ඒකක :</td>
-                  <td style="text-align: right;">${total2Days}</td>
-                </tr>
-                <tr>
-                  <td>ඊයේ මුළු ඒකක :</td>
-                  <td style="text-align: right;">${totalYest}</td>
-                </tr>
-                <tr>
-                  <td style="color: #000; font-weight: 900;">අද මුළු ඒකක :</td>
-                  <td style="text-align: right; color: #000; font-weight: 900;">${totalToday}</td>
+                  <td>මුළු අයිතම වර්ග :</td>
+                  <td style="text-align: right;">${dayItems.length}</td>
                 </tr>
                 <tr style="border-top: 3px solid #000;">
-                  <td style="font-size: 36px; font-weight: 1000; padding-top: 10px;">දින 3 මුළු එකතුව :</td>
-                  <td style="text-align: right; font-size: 36px; font-weight: 1000; padding-top: 10px;">${grandTotal}</td>
+                  <td style="font-size: 40px; font-weight: 1000; padding-top: 10px;">මුළු විකුණුම් ඒකක :</td>
+                  <td style="text-align: right; font-size: 44px; font-weight: 1000; padding-top: 10px;">${totalQty}</td>
                 </tr>
               </table>
 
@@ -339,10 +481,10 @@ export default function SummaryScreen() {
         `;
 
         try {
-            const { uri } = await Print.printToFileAsync({ html, width: 560 });
+            const { uri } = await Print.printToFileAsync({ html: singleDayHtml, width: 560 });
             await Sharing.shareAsync(uri, {
                 mimeType: 'application/pdf',
-                dialogTitle: 'Print 3-Day List with 4Barcode',
+                dialogTitle: `Print ${daySubtitle} with 4Barcode`,
                 UTI: 'com.adobe.pdf'
             });
         } catch (error) {
@@ -596,7 +738,7 @@ export default function SummaryScreen() {
                     </View>
                     <TouchableOpacity
                         style={styles.printChecklistBtn}
-                        onPress={handlePrintChecklist}
+                        onPress={() => setIsPrintModalVisible(true)}
                         activeOpacity={0.8}
                     >
                         <Ionicons name="print-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
@@ -751,6 +893,107 @@ export default function SummaryScreen() {
                                 <Text style={styles.calQuickBtnText}>Yesterday</Text>
                             </TouchableOpacity>
                         </View>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+
+            {/* Print Selection Modal */}
+            <Modal
+                visible={isPrintModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setIsPrintModalVisible(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setIsPrintModalVisible(false)}
+                >
+                    <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+                        <View style={styles.modalHeader}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Ionicons name="print" size={22} color="#3B82F6" style={{ marginRight: 8 }} />
+                                <Text style={styles.modalTitle}>Print Sales List</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setIsPrintModalVisible(false)}>
+                                <Ionicons name="close" size={24} color={isDark ? '#9CA3AF' : '#6B7280'} />
+                            </TouchableOpacity>
+                        </View>
+
+                        <Text style={{ fontSize: 13, color: isDark ? '#9CA3AF' : '#6B7280', marginBottom: 16 }}>
+                            Choose which sales report you want to print to 4Barcode:
+                        </Text>
+
+                        {/* Option 1: All 3 Days */}
+                        <TouchableOpacity
+                            style={styles.printOptionCard}
+                            onPress={() => handlePrintOption('all')}
+                            activeOpacity={0.7}
+                        >
+                            <View style={[styles.printOptionIconBox, { backgroundColor: isDark ? '#1E3A8A' : '#EFF6FF' }]}>
+                                <Ionicons name="layers" size={22} color="#3B82F6" />
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.printOptionTitle}>All 3 Days (දින 3ම)</Text>
+                                <Text style={styles.printOptionSub}>Comparison: 2 Days, Yesterday & Today</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={isDark ? '#9CA3AF' : '#9CA3AF'} />
+                        </TouchableOpacity>
+
+                        {/* Option 2: Today Only */}
+                        <TouchableOpacity
+                            style={styles.printOptionCard}
+                            onPress={() => handlePrintOption('today')}
+                            activeOpacity={0.7}
+                        >
+                            <View style={[styles.printOptionIconBox, { backgroundColor: isDark ? '#064E3B' : '#ECFDF5' }]}>
+                                <Ionicons name="today" size={22} color="#10B981" />
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.printOptionTitle}>Today Only (අද පමණි)</Text>
+                                <Text style={styles.printOptionSub}>Items sold today with quantities</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={isDark ? '#9CA3AF' : '#9CA3AF'} />
+                        </TouchableOpacity>
+
+                        {/* Option 3: Yesterday Only */}
+                        <TouchableOpacity
+                            style={styles.printOptionCard}
+                            onPress={() => handlePrintOption('yesterday')}
+                            activeOpacity={0.7}
+                        >
+                            <View style={[styles.printOptionIconBox, { backgroundColor: isDark ? '#78350F' : '#FEF3C7' }]}>
+                                <Ionicons name="time" size={22} color="#F59E0B" />
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.printOptionTitle}>Yesterday Only (ඊයේ පමණි)</Text>
+                                <Text style={styles.printOptionSub}>Items sold yesterday with quantities</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={isDark ? '#9CA3AF' : '#9CA3AF'} />
+                        </TouchableOpacity>
+
+                        {/* Option 4: 2 Days Ago */}
+                        <TouchableOpacity
+                            style={styles.printOptionCard}
+                            onPress={() => handlePrintOption('2days')}
+                            activeOpacity={0.7}
+                        >
+                            <View style={[styles.printOptionIconBox, { backgroundColor: isDark ? '#581C87' : '#F3E8FF' }]}>
+                                <Ionicons name="calendar" size={22} color="#8B5CF6" />
+                            </View>
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.printOptionTitle}>2 Days Ago (පෙර දින 2)</Text>
+                                <Text style={styles.printOptionSub}>Items sold 2 days ago with quantities</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={18} color={isDark ? '#9CA3AF' : '#9CA3AF'} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.cancelModalBtn}
+                            onPress={() => setIsPrintModalVisible(false)}
+                        >
+                            <Text style={styles.cancelModalBtnText}>Cancel</Text>
+                        </TouchableOpacity>
                     </View>
                 </TouchableOpacity>
             </Modal>
@@ -1061,5 +1304,47 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
         fontSize: 13,
         fontWeight: 'bold',
         color: isDark ? '#60A5FA' : '#3B82F6'
+    },
+
+    // Print Modal Styles
+    printOptionCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 12,
+        borderRadius: 14,
+        backgroundColor: isDark ? '#374151' : '#F9FAFB',
+        borderWidth: 1,
+        borderColor: isDark ? '#4B5563' : '#E5E7EB',
+        marginBottom: 10,
+    },
+    printOptionIconBox: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    printOptionTitle: {
+        fontSize: 15,
+        fontWeight: 'bold',
+        color: isDark ? '#F9FAFB' : '#111827',
+    },
+    printOptionSub: {
+        fontSize: 12,
+        color: isDark ? '#9CA3AF' : '#6B7280',
+        marginTop: 2,
+    },
+    cancelModalBtn: {
+        marginTop: 8,
+        paddingVertical: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 12,
+        backgroundColor: isDark ? '#374151' : '#F3F4F6',
+    },
+    cancelModalBtnText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: isDark ? '#9CA3AF' : '#6B7280',
     }
 });
