@@ -214,6 +214,13 @@ export default function HistoryScreen() {
                   .info-table { width: 100%; font-size: 34px; text-align: left; margin: 5px 0; font-weight: 700; border-collapse: collapse; }
                   .info-table td { padding: 6px 0; line-height: 1.1; }
                   .items-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+                  .items-table thead, .items-table tbody, .items-table tr, .items-table td, .items-table th {
+                    page-break-inside: avoid !important;
+                    break-inside: avoid !important;
+                  }
+                  .items-table thead {
+                    display: table-row-group !important; /* Prevents repeating header on page breaks */
+                  }
                   .items-table thead tr { background-color: #333; color: #fff; }
                   .items-table th { padding: 12px 4px; font-weight: 900; font-size: 32px; text-align: center; color: #fff !important; }
                   .summary-table { width: 100%; font-size: 38px; text-align: left; margin: 25px 0; font-weight: 800; border-collapse: collapse; }
@@ -290,7 +297,13 @@ export default function HistoryScreen() {
         `;
 
         try {
-            const { uri } = await Print.printToFileAsync({ html, width: 560 });
+            const itemCount = transaction.items?.length || 0;
+            const continuousHeight = Math.max(700, 380 + (itemCount * 85) + 400);
+            const { uri } = await Print.printToFileAsync({
+                html,
+                width: 560,
+                height: continuousHeight,
+            });
             await Sharing.shareAsync(uri, {
                 mimeType: 'application/pdf',
                 dialogTitle: 'Print Receipt with 4Barcode',

@@ -272,6 +272,13 @@ export default function SummaryScreen() {
                     .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
                     .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
                     .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                    .table thead, .table tbody, .table tr, .table td, .table th {
+                      page-break-inside: avoid !important;
+                      break-inside: avoid !important;
+                    }
+                    .table thead {
+                      display: table-row-group !important; /* Prevents repeating header on page breaks */
+                    }
                     .table th { 
                       font-size: 28px; 
                       font-weight: 900; 
@@ -343,7 +350,12 @@ export default function SummaryScreen() {
             `;
 
             try {
-                const { uri } = await Print.printToFileAsync({ html, width: 560 });
+                const continuousHeight = Math.max(650, 350 + (threeDaySales.length * 80) + 380);
+                const { uri } = await Print.printToFileAsync({
+                    html,
+                    width: 560,
+                    height: continuousHeight,
+                });
                 await Sharing.shareAsync(uri, {
                     mimeType: 'application/pdf',
                     dialogTitle: 'Print 3-Day List with 4Barcode',
@@ -425,6 +437,13 @@ export default function SummaryScreen() {
                 .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
                 .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
                 .table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                .table thead, .table tbody, .table tr, .table td, .table th {
+                  page-break-inside: avoid !important;
+                  break-inside: avoid !important;
+                }
+                .table thead {
+                  display: table-row-group !important; /* Prevents repeating header on page breaks */
+                }
                 .table th { 
                   font-size: 30px; 
                   font-weight: 900; 
@@ -481,7 +500,12 @@ export default function SummaryScreen() {
         `;
 
         try {
-            const { uri } = await Print.printToFileAsync({ html: singleDayHtml, width: 560 });
+            const continuousHeight = Math.max(500, 260 + (dayItems.length * 75) + 300);
+            const { uri } = await Print.printToFileAsync({
+                html: singleDayHtml,
+                width: 560,
+                height: continuousHeight,
+            });
             await Sharing.shareAsync(uri, {
                 mimeType: 'application/pdf',
                 dialogTitle: `Print ${daySubtitle} with 4Barcode`,

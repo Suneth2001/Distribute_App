@@ -258,6 +258,13 @@ export default function HomePOSScreen() {
               .info-table td { padding: 6px 0; line-height: 1.1; }
               
               .items-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+              .items-table thead, .items-table tbody, .items-table tr, .items-table td, .items-table th {
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+              }
+              .items-table thead {
+                display: table-row-group !important; /* Prevents browser repeating header on page breaks */
+              }
               .items-table thead tr {
                 background-color: #333;
                 color: #fff;
@@ -268,7 +275,7 @@ export default function HomePOSScreen() {
                 font-size: 32px; 
                 text-align: center;
                 line-height: 1.0;
-                color: #fff !important;
+                color: #fff !important; 
               }
               
               .summary-table { width: 100%; font-size: 38px; text-align: left; margin: 25px 0; font-weight: 800; border-collapse: collapse; }
@@ -380,9 +387,12 @@ export default function HomePOSScreen() {
     `;
 
         try {
+            const itemCount = transaction.items?.length || 0;
+            const continuousHeight = Math.max(700, 380 + (itemCount * 85) + 520);
             const { uri } = await Print.printToFileAsync({
                 html,
-                width: 560, // Optimized for high-fill on thermal printers
+                width: 560, // Optimized for thermal printers
+                height: continuousHeight, // Single continuous strip (no page splits)
             });
             await Sharing.shareAsync(uri, {
                 mimeType: 'application/pdf',
