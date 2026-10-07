@@ -2,10 +2,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import React, { useCallback, useState } from 'react';
-import { Alert, FlatList, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { generateId, getProducts, getShops, getTransactions, setTransactions } from '../../src/store/database';
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useColorScheme } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { addTransaction, getNextBillNumber, getProducts, getShops, setShops as setShopsDb } from '../../src/store/database';
 
 export default function HomePOSScreen() {
+    const isDark = useColorScheme() === 'dark';
+    const styles = getStyles(isDark);
+    const insets = useSafeAreaInsets();
+
     const [products, setProducts] = useState<any[]>([]);
     const [shops, setShops] = useState<any[]>([]);
     const [selectedShop, setSelectedShop] = useState<string | null>(null);
@@ -14,6 +20,11 @@ export default function HomePOSScreen() {
     const [searchQuery, setSearchQuery] = useState('');
     const [isShopModalVisible, setIsShopModalVisible] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
+
+    // Checkout State
+    const [isCheckoutModalVisible, setCheckoutModalVisible] = useState(false);
+    const [paidAmount, setPaidAmount] = useState('');
+    const [isProcessing, setIsProcessing] = useState(false);
 
     useFocusEffect(
         useCallback(() => {
@@ -89,6 +100,7 @@ export default function HomePOSScreen() {
     const calculateTotals = () => {
         let total = 0;
         let cost = 0;
+        let marketTotal = 0;
         Object.keys(cart).forEach((id: string) => {
             const p = products.find(prod => prod.id === id);
             if (p) {
@@ -96,12 +108,13 @@ export default function HomePOSScreen() {
                 const price = getProductPrice(p);
                 total += price * qty;
                 cost += p.baseCost * qty;
+                marketTotal += (p.marketPrice || p.defaultPrice) * qty;
             }
         });
-        return { total, cost, profit: total - cost };
+        return { total, cost, profit: total - cost, marketTotal };
     };
 
-    const handleCheckout = async () => {
+    const handleCheckoutPress = () => {
         if (Object.keys(cart).length === 0) {
             Alert.alert('Empty Cart', 'Please add items to sell.');
             return;
@@ -110,103 +123,288 @@ export default function HomePOSScreen() {
             Alert.alert('Shop Missing', 'Please select a shop/destination.');
             return;
         }
-
-        const { total, cost, profit } = calculateTotals();
-        const shopDetail = shops.find(s => s.id === selectedShop);
-
-        const transactionItems = Object.keys(cart).map((id: string) => {
-            const p = products.find(prod => prod.id === id);
-            return {
-                id: p.id,
-                name: p.name,
-                qty: cart[id],
-                unitPrice: getProductPrice(p),
-                totalPrice: getProductPrice(p) * cart[id],
-                cost: p.baseCost * cart[id]
-            };
-        });
-
-        const newTransaction = {
-            id: generateId(),
-            date: new Date().toISOString(),
-            type: 'sale',
-            shopId: selectedShop,
-            shopName: shopDetail?.name || 'Unknown',
-            items: transactionItems,
-            total,
-            totalCost: cost,
-            profit
-        };
-
-        const existing = await getTransactions();
-        await setTransactions([...existing, newTransaction]);
-
-        // Deduct Stock
-        // Implementation of stock deduction could go here in a production app using setProducts
-        printReceipt(newTransaction);
-        setCart({}); // clear cart
-        setCustomPrices({}); // clear overrides
+        setPaidAmount(''); // Reset
+        setCheckoutModalVisible(true);
     };
 
-    const printReceipt = async (transaction: any) => {
-        const htmlLines = transaction.items.map((i: any) => `
+    const processCheckout = async () => {
+        if (isProcessing) return;
+        setIsProcessing(true);
+
+        try {
+            const { total, cost, profit, marketTotal } = calculateTotals();
+            const shopDetail = shops.find(s => s.id === selectedShop);
+
+            const transactionItems = Object.keys(cart).map((id: string) => {
+                const p = products.find(prod => prod.id === id);
+                return {
+                    id: p.id,
+                    nameEnglish: p.nameEnglish,
+                    nameSinhala: p.nameSinhala,
+                    qty: cart[id],
+                    unitPrice: getProductPrice(p),
+                    totalPrice: getProductPrice(p) * cart[id],
+                    marketPrice: p.marketPrice || p.defaultPrice,
+                    cost: p.baseCost * cart[id]
+                };
+            });
+
+            const discountAmt = marketTotal - total; // Market Price - Selling Price = Customer Discount
+            const netTotal = total; // Net total added to shop debt is the total price
+            const paid = parseFloat(paidAmount) || 0;
+            const currentDebt = shopDetail?.creditBalance || 0;
+            const newDebt = (currentDebt + netTotal) - paid;
+
+            // Generate daily bill number fast
+            const billNumber = await getNextBillNumber();
+
+            const newTransaction = {
+                id: billNumber,
+                date: new Date().toISOString(),
+                type: 'sale',
+                shopId: selectedShop,
+                shopName: shopDetail?.name || 'Unknown',
+                items: transactionItems,
+                total,
+                discount: discountAmt,
+                netTotal,
+                totalCost: cost,
+                profit: profit, // keep exact profit tracking
+                paidAmount: paid
+            };
+
+            // Fast partition append into database
+            await addTransaction(newTransaction);
+
+            // Update Shop Credit
+            const updatedShops = shops.map(s => {
+                if (s.id === selectedShop) {
+                    return { ...s, creditBalance: newDebt };
+                }
+                return s;
+            });
+            await setShopsDb(updatedShops); // Save to local storage database
+            setShops(updatedShops); // Update React state
+
+            // Clear cart & close modal immediately so UI is completely unblocked
+            setCart({}); // clear cart
+            setCustomPrices({}); // clear overrides
+            setPaidAmount('');
+            setCheckoutModalVisible(false);
+
+            // Print receipt asynchronously without freezing checkout flow
+            setTimeout(() => {
+                printReceipt(newTransaction, currentDebt, discountAmt, paid, newDebt, netTotal);
+            }, 150);
+
+        } catch (error: any) {
+            console.error('Checkout error:', error);
+            Alert.alert('Checkout Error', error?.message || 'Failed to complete transaction. Please try again.');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const printReceipt = async (transaction: any, currentDebt: number, discountAmt: number, paidAmt: number, newDebt: number, netTotal: number) => {
+        const htmlLines = transaction.items.map((i: any, index: number) => `
       <tr>
-        <td style="padding: 4px; border-bottom: 1px dotted #ccc;">${i.name}</td>
-        <td style="padding: 4px; border-bottom: 1px dotted #ccc;">${i.qty}</td>
-        <td style="padding: 4px; border-bottom: 1px dotted #ccc; text-align: right;">Rs ${i.unitPrice}</td>
-        <td style="padding: 4px; border-bottom: 1px dotted #ccc; text-align: right;">Rs ${i.totalPrice}</td>
+        <td colspan="4" style="padding: 8px 0 2px 0; text-align: left;  font-size: 38px; line-height: 1.1;">
+            ${index + 1}. ${i.nameSinhala || i.nameEnglish}
+        </td>
+      </tr>
+      <tr>
+        <td style="padding: 0 0 12px 0; text-align: left; font-size: 34px; line-height: 1.0; font-weight: 700;">${i.qty}</td>
+        <td style="padding: 0 0 12px 0; text-align: center; font-size: 34px; line-height: 1.0;">${parseFloat(i.marketPrice).toFixed(2)}</td>
+        <td style="padding: 0 0 12px 0; text-align: center; font-size: 34px; line-height: 1.0;">${parseFloat(i.unitPrice).toFixed(2)}</td>
+        <td style="padding: 0 0 12px 0; text-align: right; font-size: 34px; font-weight: 900; line-height: 1.0;">${parseFloat(i.totalPrice).toFixed(2)}</td>
       </tr>
     `).join('');
 
         const html = `
       <html>
         <head>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <style>
+              * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+              }
+              @page {
+                size: auto;
+                margin: 0;
+              }
+              html, body {
+                width: 100%;
+                margin: 0;
+                padding: 0;
+                color: #000;
+                font-family: sans-serif;
+                -webkit-print-color-adjust: exact;
+                line-height: 1.0;
+              }
+              body { 
+                text-align: center; 
+                padding: 0 4px;
+              }
+              .header-title { font-size: 60px; font-weight: 900; margin: 5px 0 0 0; padding: 0; line-height: 1.0; }
+              .header-sub { font-size: 34px; margin: 4px 0; padding: 0; font-weight: 700; }
+              .divider { border-bottom: 2px dashed #000; margin: 12px 0; }
+              .solid-divider { border-bottom: 3px solid #000; margin: 12px 0; }
+              
+              .info-table { width: 100%; font-size: 34px; text-align: left; margin: 5px 0; font-weight: 700; border-collapse: collapse; }
+              .info-table td { padding: 6px 0; line-height: 1.1; }
+              
+              .items-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+              .items-table thead tr {
+                background-color: #333;
+                color: #fff;
+              }
+              .items-table th { 
+                padding: 12px 4px; 
+                font-weight: 900; 
+                font-size: 32px; 
+                text-align: center;
+                line-height: 1.0;
+                color: #fff !important;
+              }
+              
+              .summary-table { width: 100%; font-size: 38px; text-align: left; margin: 25px 0; font-weight: 800; border-collapse: collapse; }
+              .summary-table td { padding: 8px 0; line-height: 1.1; }
+              
+              .profit-box { 
+                text-align: center; 
+                font-size: 48px; 
+                font-weight: 900; 
+                margin: 15px 0; 
+                border: 4px solid #000;
+                padding: 15px;
+                border-radius: 12px;
+                line-height: 1.2;
+                width: 100%;
+              }
+              
+              .footer { text-align: center; font-size: 34px; margin-top: 15px; line-height: 1.2; font-weight: 700; }
+              .notice { font-size: 26px; font-weight: 800; margin: 10px 0; border-top: 2px solid #000; padding-top: 8px; }
+              .brand { font-size: 22px; color: #333; margin-top: 12px; font-weight: normal; line-height: 1.1; }
+          </style>
         </head>
-        <body style="font-family: monospace; text-align: center; padding: 20px;">
-          <h2 style="margin: 0; padding: 0;">DISTRIBUTOR CO</h2>
-          <p style="margin: 0; padding: 0;">Shop: ${transaction.shopName}</p>
-          <p style="margin: 0; padding: 0; border-bottom: 1px dashed black;">Date: ${new Date(transaction.date).toLocaleString()}</p>
-          <br/>
-          <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 14px;">
+        <body>
+          <div class="header-title">Dilki Distributors</div>
+          <div class="header-sub">Rathkarawwa, Maspotha</div>
+          <div class="header-sub">072 3272457 / 076 1773163</div>
+          
+          <div class="divider"></div>
+          
+          <table class="info-table">
+            <tr>
+              <td>බිල් අංකය :</td>
+              <td style="text-align: right;">${transaction.id}</td>
+            </tr>
+            <tr>
+              <td>ගනුදෙනුකරු :</td>
+              <td style="text-align: right;">${transaction.shopName}</td>
+            </tr>
+            <tr>
+              <td>දිනය සහ වේලාව :</td>
+              <td style="text-align: right;">${new Date(transaction.date).toLocaleString()}</td>
+            </tr>
+          </table>
+          
+          <div class="solid-divider"></div>
+
+          <table class="items-table">
             <thead>
               <tr>
-                <td style="font-weight: bold; border-bottom: 1px solid black;">Item</td>
-                <td style="font-weight: bold; border-bottom: 1px solid black;">Qty</td>
-                <td style="font-weight: bold; border-bottom: 1px solid black; text-align: right;">Price</td>
-                <td style="font-weight: bold; border-bottom: 1px solid black; text-align: right;">Total</td>
+                <th style="text-align: left;">ප්‍රමාණය</th>
+                <th style="text-align: center;">සඳහන් මිල</th>
+                <th style="text-align: center;">අපේ මිල</th>
+                <th style="text-align: right;">එකතුව</th>
               </tr>
             </thead>
             <tbody>
               ${htmlLines}
             </tbody>
           </table>
-          <br/>
-          <div style="font-size: 18px; font-weight: bold; text-align: right; border-top: 1px dashed black; padding-top: 10px;">
-            TOTAL: Rs ${transaction.total}
+          
+          <div class="divider"></div>
+          
+          <div style="font-size: 36px; text-align: left; margin: 12px 0; font-weight: 900; line-height: 1.0;">
+            අයිතම සංඛ්‍යාව : ${transaction.items.length}
           </div>
-          <br/>
-          <p>Thank you for doing business with us!</p>
+          
+          <table class="summary-table">
+            ${currentDebt > 0 ? `
+            <tr>
+              <td>පෙර ණය</td>
+              <td style="text-align: right;">රු. ${currentDebt.toFixed(2)}</td>
+            </tr>` : ''}
+            <tr>
+              <td>මුළු එකතුව</td>
+              <td style="text-align: right;">රු. ${parseFloat(transaction.total).toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td>ගෙවිය යුතු මුදල</td>
+              <td style="text-align: right;">රු. ${(currentDebt + transaction.total).toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td>ගෙවූ මුදල</td>
+              <td style="text-align: right;">රු. ${paidAmt.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td style="font-weight: 1000; font-size: 45px; border-top: 4px solid #000; padding-top: 12px; margin-top: 12px;">ණය මුදල</td>
+              <td style="font-weight: 1000; font-size: 45px; text-align: right; border-top: 4px solid #000; padding-top: 12px; margin-top: 12px;">රු. ${newDebt.toFixed(2)}</td>
+            </tr>
+          </table>
+          
+          <div class="profit-box">
+            ඔබ ලැබූ මුළු ලාභය<br/>
+            රු. ${discountAmt.toFixed(2)}
+          </div>
+          
+          <div class="solid-divider"></div>
+          
+          <div class="footer">
+            <div class="notice">
+                        ඔබගේ විශ්වාසයට ස්තූති!<br/>
+            </div>
+            <div class="brand">
+              Develop & Designed by ZipZipy<br/>
+              076 659 5714
+            </div>
+          </div>
         </body>
       </html>
     `;
 
         try {
-            await Print.printAsync({ html });
+            await Print.printAsync({
+                html,
+                width: 560, // Optimized for high-fill on thermal printers
+            });
         } catch (error) {
             Alert.alert('Print Error', 'Could not open print manager');
         }
     };
 
     const { total } = calculateTotals();
+    const selectedShopDetail = shops.find(s => s.id === selectedShop);
+    const currentDebt = selectedShopDetail?.creditBalance || 0;
 
     // Custom modern aesthetics
     return (
-        <SafeAreaView style={styles.container}>
+        <View style={styles.container}>
 
 
             <View style={styles.shopSelector}>
-                <Text style={styles.selectorLabel}>Selling to Shop:</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <Text style={styles.selectorLabel}>Selling to Shop:</Text>
+                    {selectedShopDetail && (
+                        <Text style={[styles.selectorLabel, (currentDebt > 0) ? { color: '#EF4444' } : { color: '#10B981' }]}>
+                            Debt: Rs {currentDebt}
+                        </Text>
+                    )}
+                </View>
                 <TouchableOpacity
                     style={styles.dropdownButton}
                     onPress={() => setIsShopModalVisible(true)}
@@ -222,8 +420,9 @@ export default function HomePOSScreen() {
                 <View style={styles.searchSection}>
                     <Ionicons name="search" size={20} color="#9CA3AF" style={styles.searchIcon} />
                     <TextInput
-                        style={styles.searchInput}
+                        style={[styles.searchInput, { color: isDark ? '#FFF' : '#111827' }]}
                         placeholder="Search products to add..."
+                        placeholderTextColor={isDark ? '#9CA3AF' : '#999'}
                         value={searchQuery}
                         onChangeText={setSearchQuery}
                     />
@@ -231,7 +430,10 @@ export default function HomePOSScreen() {
 
                 {searchQuery.length > 0 && (
                     <ScrollView style={styles.searchResultsContainer} keyboardShouldPersistTaps="handled">
-                        {products.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 5).map(p => (
+                        {products.filter(p =>
+                            (p.nameEnglish && p.nameEnglish.toLowerCase().includes(searchQuery.toLowerCase())) ||
+                            (p.nameSinhala && p.nameSinhala.toLowerCase().includes(searchQuery.toLowerCase()))
+                        ).slice(0, 10).map(p => (
                             <TouchableOpacity key={p.id} style={styles.searchResultItem} onPress={() => {
                                 if (!cart[p.id]) {
                                     addToCart(p.id);
@@ -239,8 +441,9 @@ export default function HomePOSScreen() {
                                 setSearchQuery('');
                             }}>
                                 <View style={{ flex: 1 }}>
-                                    <Text style={styles.searchResultName}>{p.name}</Text>
-                                    <Text style={styles.searchResultPrice}>Rs {getProductPrice(p)} | Stock: {p.stock}</Text>
+                                    <Text style={styles.searchResultName}>{p.nameEnglish}</Text>
+                                    {p.nameSinhala ? <Text style={styles.searchResultSinhala}>{p.nameSinhala}</Text> : null}
+                                    <Text style={styles.searchResultPrice}>Rs {getProductPrice(p)}</Text>
                                 </View>
                                 <Ionicons name="add-circle" size={28} color="#10B981" />
                             </TouchableOpacity>
@@ -250,10 +453,10 @@ export default function HomePOSScreen() {
             </View>
 
             <View style={styles.tableContainer}>
-                <View style={styles.tableHeader}>
+                <View style={[styles.tableHeader, { paddingLeft: 16 }]}>
                     <Text style={[styles.headerText, { flex: 2 }]}>Product</Text>
-                    <Text style={[styles.headerText, { flex: 1.2 }]}>Cost/Stk</Text>
-                    <Text style={[styles.headerText, { flex: 1.5 }]}>Unit (Rs)</Text>
+                    <Text style={[styles.headerText, { flex: 1 }]}>MRP</Text>
+                    <Text style={[styles.headerText, { flex: 1.2 }]}>Unit (Rs)</Text>
                     <Text style={[styles.headerText, { flex: 1.8, textAlign: 'right' }]}>Quantity</Text>
                 </View>
 
@@ -279,15 +482,15 @@ export default function HomePOSScreen() {
                         return (
                             <View style={styles.tableRow}>
                                 <View style={{ flex: 2, paddingRight: 4, justifyContent: 'center' }}>
-                                    <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
+                                    <Text style={styles.productName} numberOfLines={2}>
+                                        {item.nameSinhala ? item.nameSinhala : item.nameEnglish}
+                                    </Text>
+                                </View>
+                                <View style={{ flex: 1, justifyContent: 'center' }}>
+                                    <Text style={[styles.cellText, { textDecorationLine: 'line-through', color: '#9CA3AF' }]}>Rs {item.marketPrice || item.defaultPrice}</Text>
                                 </View>
 
                                 <View style={{ flex: 1.2, justifyContent: 'center' }}>
-                                    <Text style={styles.cellText}>Rs {item.baseCost}</Text>
-                                    <Text style={styles.subCellText}>{item.stock} in stock</Text>
-                                </View>
-
-                                <View style={{ flex: 1.5, justifyContent: 'center' }}>
                                     <View style={styles.priceInputContainer}>
                                         <Text style={styles.currencyPrefix}>Rs</Text>
                                         <TextInput
@@ -304,7 +507,7 @@ export default function HomePOSScreen() {
 
                                 <View style={{ flex: 1.8, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
                                     <TouchableOpacity style={styles.qtyButtonTable} onPress={() => removeFromCart(item.id)}>
-                                        <Ionicons name="remove" size={16} color="#4B5563" />
+                                        <Ionicons name="remove" size={16} color={isDark ? '#F9FAFB' : '#4B5563'} />
                                     </TouchableOpacity>
 
                                     <TextInput
@@ -328,7 +531,7 @@ export default function HomePOSScreen() {
                                     />
 
                                     <TouchableOpacity style={styles.qtyButtonTable} onPress={() => addToCart(item.id)}>
-                                        <Ionicons name="add" size={16} color="#4B5563" />
+                                        <Ionicons name="add" size={16} color={isDark ? '#F9FAFB' : '#4B5563'} />
                                     </TouchableOpacity>
 
                                     <TouchableOpacity style={{ marginLeft: 8 }} onPress={() => deleteFromCart(item.id)}>
@@ -346,9 +549,9 @@ export default function HomePOSScreen() {
                     <Text style={styles.totalText}>Total: Rs {total}</Text>
                     <Text style={styles.itemsLabel}>{Object.keys(cart).length} Items</Text>
                 </View>
-                <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckout}>
-                    <Ionicons name="print" size={20} color="#FFF" style={{ marginRight: 8 }} />
-                    <Text style={styles.checkoutText}>Print Bill</Text>
+                <TouchableOpacity style={styles.checkoutButton} onPress={handleCheckoutPress}>
+                    <Ionicons name="cart" size={20} color="#FFF" style={{ marginRight: 8 }} />
+                    <Text style={styles.checkoutText}>Checkout</Text>
                 </TouchableOpacity>
             </View>
 
@@ -394,60 +597,156 @@ export default function HomePOSScreen() {
                     </View>
                 </TouchableOpacity>
             </Modal>
-        </SafeAreaView>
+
+            {/* Checkout Payment Modal */}
+
+            <Modal
+                visible={isCheckoutModalVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setCheckoutModalVisible(false)}
+            >
+
+                <View style={[styles.checkoutOverlay, { paddingTop: insets.top }]}>
+                    <StatusBar style={isDark ? 'light' : 'dark'} />
+                    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+                        <View style={styles.checkoutContent}>
+                            <View style={styles.modalHeader}>
+                                <Text style={styles.modalTitle}>Complete Sale</Text>
+                                <TouchableOpacity onPress={() => setCheckoutModalVisible(false)}>
+                                    <Ionicons name="close" size={24} color="#6B7280" />
+                                </TouchableOpacity>
+                            </View>
+
+                            <ScrollView keyboardShouldPersistTaps="handled">
+                                <View style={styles.summaryBox}>
+                                    <Text style={styles.summaryTitle}>{selectedShopDetail?.name}</Text>
+                                    <View style={styles.summaryRow}>
+                                        <Text style={styles.summaryLabel}>Current Debt:</Text>
+                                        <Text style={styles.summaryValue}>Rs {currentDebt}</Text>
+                                    </View>
+                                    <View style={styles.summaryRow}>
+                                        <Text style={styles.summaryLabel}>New Items Total:</Text>
+                                        <Text style={styles.summaryValue}>+ Rs {total}</Text>
+                                    </View>
+                                    <View style={[styles.summaryRow, styles.summaryDivider]}>
+                                        <Text style={[styles.summaryLabel, { fontWeight: 'bold' }]}>Total Amount Due:</Text>
+                                        <Text style={[styles.summaryValue, { fontWeight: 'bold', fontSize: 18, color: '#1D4ED8' }]}>Rs {currentDebt + total}</Text>
+                                    </View>
+                                </View>
+
+                                <Text style={styles.label}>Paid Amount (Rs) *</Text>
+                                <TextInput
+                                    style={[styles.input, { fontSize: 24, paddingVertical: 16 }]}
+                                    value={paidAmount}
+                                    onChangeText={setPaidAmount}
+                                    placeholder="0"
+                                    placeholderTextColor={isDark ? '#9CA3AF' : '#999'}
+                                    keyboardType="numeric"
+                                    autoFocus
+                                />
+
+                                <View style={styles.newDebtPreview}>
+                                    <Text style={styles.newDebtLabel}>New Outstanding Debt</Text>
+                                    <Text style={[styles.newDebtValue, ((currentDebt + total) - (parseFloat(paidAmount) || 0)) > 0 ? { color: '#EF4444' } : { color: '#10B981' }]}>
+                                        Rs {(currentDebt + total) - (parseFloat(paidAmount) || 0)}
+                                    </Text>
+                                </View>
+
+                                <TouchableOpacity 
+                                    style={[styles.confirmCheckoutBtn, isProcessing && { opacity: 0.7 }]} 
+                                    onPress={processCheckout}
+                                    disabled={isProcessing}
+                                >
+                                    {isProcessing ? (
+                                        <>
+                                            <ActivityIndicator size="small" color="#FFF" style={{ marginRight: 8 }} />
+                                            <Text style={styles.confirmCheckoutBtnText}>Processing Sale...</Text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Ionicons name="checkmark-done" size={20} color="#FFF" style={{ marginRight: 8 }} />
+                                            <Text style={styles.confirmCheckoutBtnText}>Confirm & Print Bill</Text>
+                                        </>
+                                    )}
+                                </TouchableOpacity>
+                            </ScrollView>
+                        </View>
+                    </KeyboardAvoidingView>
+                </View>
+            </Modal>
+        </View>
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F3F4F6' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#FFF', alignItems: 'center', borderBottomWidth: 1, borderColor: '#E5E7EB' },
-    headerTitle: { fontSize: 22, fontWeight: 'bold', color: '#1F2937' },
-    shopSelector: { padding: 12, backgroundColor: '#FFF', marginBottom: 8 },
-    selectorLabel: { fontSize: 13, color: '#6B7280', marginBottom: 8, fontWeight: 'bold' },
-    dropdownButton: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F9FAFB', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12 },
-    dropdownButtonText: { fontSize: 16, color: '#1F2937', fontWeight: '500' },
+const getStyles = (isDark: boolean) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: isDark ? '#111827' : '#F3F4F6' },
+    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: isDark ? '#1F2937' : '#FFF', alignItems: 'center', borderBottomWidth: 1, borderColor: isDark ? '#374151' : '#E5E7EB' },
+    headerTitle: { fontSize: 22, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#1F2937' },
+    shopSelector: { padding: 12, backgroundColor: isDark ? '#1F2937' : '#FFF', marginBottom: 8 },
+    selectorLabel: { fontSize: 13, color: isDark ? '#D1D5DB' : '#6B7280', fontWeight: 'bold' },
+    dropdownButton: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: isDark ? '#374151' : '#F9FAFB', borderWidth: 1, borderColor: isDark ? '#4B5563' : '#D1D5DB', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12 },
+    dropdownButtonText: { fontSize: 16, color: isDark ? '#F9FAFB' : '#1F2937', fontWeight: '500' },
 
     // Modal Select
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContent: { backgroundColor: '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
-    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 16, borderBottomWidth: 1, borderColor: '#F3F4F6' },
-    modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#111827' },
-    modalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, marginBottom: 8, backgroundColor: '#F9FAFB' },
-    modalOptionActive: { backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1 },
-    modalOptionText: { fontSize: 16, color: '#4B5563', fontWeight: '500' },
-    modalOptionTextActive: { color: '#1D4ED8', fontWeight: 'bold' },
+    modalContent: { backgroundColor: isDark ? '#1F2937' : '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
+    modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 16, borderBottomWidth: 1, borderColor: isDark ? '#374151' : '#F3F4F6' },
+    modalTitle: { fontSize: 18, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#111827' },
+    modalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, marginBottom: 8, backgroundColor: isDark ? '#374151' : '#F9FAFB' },
+    modalOptionActive: { backgroundColor: isDark ? '#1E3A8A' : '#DBEAFE', borderColor: isDark ? '#1D4ED8' : '#BFDBFE', borderWidth: 1 },
+    modalOptionText: { fontSize: 16, color: isDark ? '#D1D5DB' : '#4B5563', fontWeight: '500' },
+    modalOptionTextActive: { color: isDark ? '#60A5FA' : '#1D4ED8', fontWeight: 'bold' },
+
+    // Checkout Modal
+    checkoutOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    checkoutContent: { backgroundColor: isDark ? '#1F2937' : '#FFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '90%' },
+    summaryBox: { backgroundColor: isDark ? '#374151' : '#F9FAFB', borderRadius: 12, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: isDark ? '#4B5563' : '#E5E7EB' },
+    summaryTitle: { fontSize: 18, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#111827', marginBottom: 12 },
+    summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+    summaryLabel: { fontSize: 14, color: isDark ? '#D1D5DB' : '#4B5563' },
+    summaryValue: { fontSize: 14, color: isDark ? '#F9FAFB' : '#111827', fontWeight: '600' },
+    summaryDivider: { borderTopWidth: 1, borderColor: isDark ? '#4B5563' : '#D1D5DB', paddingTop: 8, marginTop: 4 },
+    label: { fontSize: 14, color: isDark ? '#D1D5DB' : '#374151', marginBottom: 6, fontWeight: 'bold' },
+    input: { borderWidth: 1, borderColor: isDark ? '#4B5563' : '#D1D5DB', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 16, backgroundColor: isDark ? '#374151' : '#FFF', color: isDark ? '#FFF' : '#000' },
+    newDebtPreview: { alignItems: 'center', marginVertical: 12, padding: 12, backgroundColor: isDark ? '#1E3A8A' : '#EFF6FF', borderRadius: 8 },
+    newDebtLabel: { fontSize: 12, color: isDark ? '#9CA3AF' : '#6B7280', textTransform: 'uppercase', fontWeight: 'bold' },
+    newDebtValue: { fontSize: 24, fontWeight: '900', marginTop: 4 },
+    confirmCheckoutBtn: { backgroundColor: '#10B981', flexDirection: 'row', justifyContent: 'center', padding: 16, borderRadius: 12, marginTop: 12 },
+    confirmCheckoutBtnText: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
 
     searchSection: {
-        flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF',
+        flexDirection: 'row', alignItems: 'center', backgroundColor: isDark ? '#1F2937' : '#FFF',
         marginHorizontal: 12, marginBottom: 12, borderRadius: 8, paddingHorizontal: 12,
-        borderWidth: 1, borderColor: '#D1D5DB', height: 48
+        borderWidth: 1, borderColor: isDark ? '#374151' : '#D1D5DB', height: 48
     },
     searchIcon: { marginRight: 8 },
-    searchInput: { flex: 1, fontSize: 16, color: '#1F2937' },
+    searchInput: { flex: 1, fontSize: 16, color: isDark ? '#F9FAFB' : '#1F2937' },
 
     searchResultsContainer: {
-        backgroundColor: '#FFF', marginHorizontal: 12, marginBottom: 16, borderRadius: 8,
-        borderWidth: 1, borderColor: '#E5E7EB', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, elevation: 15,
+        backgroundColor: isDark ? '#374151' : '#FFF', marginHorizontal: 12, marginBottom: 16, borderRadius: 8,
+        borderWidth: 1, borderColor: isDark ? '#4B5563' : '#E5E7EB', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, elevation: 15,
         position: 'absolute', top: 52, left: 0, right: 0, zIndex: 100 // ensure overlay
     },
     searchResultItem: {
-        flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderColor: '#F3F4F6'
+        flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderColor: isDark ? '#4B5563' : '#F3F4F6'
     },
-    searchResultName: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },
-    searchResultPrice: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+    searchResultName: { fontSize: 16, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#1F2937' },
+    searchResultSinhala: { fontSize: 13, color: isDark ? '#D1D5DB' : '#374151' },
+    searchResultPrice: { fontSize: 12, color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 2 },
 
     emptyCartContainer: { padding: 40, alignItems: 'center', justifyContent: 'center' },
-    emptyCartText: { fontSize: 16, color: '#9CA3AF', marginTop: 12, textAlign: 'center' },
+    emptyCartText: { fontSize: 16, color: isDark ? '#9CA3AF' : '#9CA3AF', marginTop: 12, textAlign: 'center' },
 
     // --- Table Design Elements ---
     tableContainer: {
         flex: 1,
-        backgroundColor: '#FFF',
+        backgroundColor: isDark ? '#1F2937' : '#FFF',
         marginHorizontal: 12,
         marginBottom: 100, // accommodate bottom bar
         borderRadius: 16,
         borderWidth: 1,
-        borderColor: '#E2E8F0',
+        borderColor: isDark ? '#374151' : '#E2E8F0',
         shadowColor: '#3B82F6', shadowOpacity: 0.1, shadowRadius: 10, elevation: 6,
         overflow: 'hidden'
     },
@@ -455,9 +754,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         paddingHorizontal: 12,
         paddingVertical: 14,
-        backgroundColor: '#2563EB',
+        backgroundColor: isDark ? '#1E3A8A' : '#2563EB',
         borderBottomWidth: 1,
-        borderColor: '#1D4ED8',
+        borderColor: isDark ? '#1D4ED8' : '#1D4ED8',
     },
     headerText: {
         fontSize: 12,
@@ -472,46 +771,65 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 12,
         paddingVertical: 14,
-        backgroundColor: '#FFF',
+        backgroundColor: isDark ? '#1F2937' : '#FFF',
         borderBottomWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: isDark ? '#374151' : '#E5E7EB',
         borderLeftWidth: 4,
         borderLeftColor: '#3B82F6',
         marginVertical: 2
     },
-    productName: { fontSize: 13, fontWeight: 'bold', color: '#1F2937' },
-    cellText: { fontSize: 13, color: '#374151', fontWeight: 'bold' },
-    subCellText: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
+    productName: { fontSize: 13, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#1F2937' },
+    productSinhalaName: { fontSize: 11, color: isDark ? '#D1D5DB' : '#4B5563' },
+    cellText: { fontSize: 13, color: isDark ? '#D1D5DB' : '#374151', fontWeight: 'bold' },
+    subCellText: { fontSize: 10, color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 2, fontStyle: 'italic' },
 
     priceInputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#D1D5DB',
+        borderColor: isDark ? '#4B5563' : '#D1D5DB',
         borderRadius: 6,
-        backgroundColor: '#FFF',
+        backgroundColor: isDark ? '#374151' : '#FFF',
         paddingHorizontal: 4,
         paddingVertical: 4,
         width: 75
     },
-    currencyPrefix: { fontSize: 13, color: '#6B7280', marginRight: 4 },
+    currencyPrefix: { fontSize: 13, color: isDark ? '#9CA3AF' : '#6B7280', marginRight: 4 },
     priceInputTable: {
-        flex: 1, fontSize: 14, color: '#111827', fontWeight: 'bold', padding: 0
+        flex: 1, fontSize: 14, color: isDark ? '#F9FAFB' : '#111827', fontWeight: 'bold', padding: 0
     },
 
     qtyInputTable: {
-        borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 4, paddingVertical: 4, paddingHorizontal: 0,
-        width: 36, fontSize: 13, color: '#111827', fontWeight: 'bold', backgroundColor: '#FFF', textAlign: 'center',
+        borderWidth: 1, borderColor: isDark ? '#4B5563' : '#D1D5DB', borderRadius: 4, paddingVertical: 4, paddingHorizontal: 0,
+        width: 36, fontSize: 13, color: isDark ? '#F9FAFB' : '#111827', fontWeight: 'bold', backgroundColor: isDark ? '#374151' : '#FFF', textAlign: 'center',
         marginHorizontal: 4
     },
     qtyButtonTable: {
-        width: 26, height: 26, borderRadius: 13, backgroundColor: '#F3F4F6',
-        justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#E5E7EB'
+        width: 26, height: 26, borderRadius: 13, backgroundColor: isDark ? '#4B5563' : '#F3F4F6',
+        justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: isDark ? '#6B7280' : '#E5E7EB'
     },
 
-    cartFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFF', padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderTopWidth: 1, borderColor: '#E5E7EB', elevation: 15, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8 },
-    totalText: { fontSize: 20, fontWeight: 'bold', color: '#111827' },
-    itemsLabel: { fontSize: 13, color: '#6B7280', marginTop: 2 },
+    cartFooter: {
+        position: 'absolute',
+        bottom: 75, // Lifted above the new taller tab bar 
+        left: 0,
+        right: 0,
+        backgroundColor: isDark ? '#1F2937' : '#FFF',
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        paddingBottom: 15, // Reduced since it's already lifted 
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        borderTopWidth: 1,
+        borderColor: isDark ? '#374151' : '#E5E7EB',
+        elevation: 15,
+        shadowColor: '#000',
+        shadowOpacity: 0.1,
+        shadowRadius: 8
+    },
+    totalText: { fontSize: 20, fontWeight: 'bold', color: isDark ? '#F9FAFB' : '#111827' },
+    itemsLabel: { fontSize: 13, color: isDark ? '#9CA3AF' : '#6B7280', marginTop: 2 },
     checkoutButton: { backgroundColor: '#3B82F6', flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
     checkoutText: { color: '#FFF', fontSize: 16, fontWeight: 'bold' }
 });

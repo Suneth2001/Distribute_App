@@ -1,18 +1,30 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
+import { useColorScheme } from 'react-native';
 
 export default function TabLayout() {
+    const isDark = useColorScheme() === 'dark';
+
     return (
         <Tabs screenOptions={{
             headerShown: true,
-            tabBarActiveTintColor: '#3B82F6',
+            headerStyle: {
+                backgroundColor: isDark ? '#1F2937' : '#FFF',
+                borderBottomColor: isDark ? '#374151' : '#E5E7EB',
+                borderBottomWidth: 1,
+            },
+            headerTintColor: isDark ? '#F9FAFB' : '#111827',
+            tabBarActiveTintColor: isDark ? '#60A5FA' : '#3B82F6',
+            tabBarInactiveTintColor: isDark ? '#9CA3AF' : '#6B7280',
             tabBarStyle: {
+                backgroundColor: isDark ? '#1F2937' : '#FFF',
                 elevation: 8,
                 shadowColor: '#000',
-                borderTopWidth: 0,
-                height: 60,
-                paddingBottom: 8,
-                paddingTop: 8
+                borderTopColor: isDark ? '#374151' : '#E5E7EB',
+                borderTopWidth: 1,
+                height: 75,
+                paddingBottom: 20,
+                paddingTop: 10
             }
         }}>
             <Tabs.Screen
@@ -37,6 +49,13 @@ export default function TabLayout() {
                 }}
             />
             <Tabs.Screen
+                name="history"
+                options={{
+                    title: 'History',
+                    tabBarIcon: ({ color }) => <Ionicons name="receipt-outline" size={24} color={color} />
+                }}
+            />
+            <Tabs.Screen
                 name="summary"
                 options={{
                     title: 'Summary',
@@ -47,6 +66,7 @@ export default function TabLayout() {
                 name="expenses"
                 options={{
                     title: 'Expenses',
+                    href: null,
                     tabBarIcon: ({ color }) => <Ionicons name="receipt-outline" size={24} color={color} />
                 }}
             />

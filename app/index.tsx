@@ -13,8 +13,11 @@ export default function Index() {
     const checkUser = async () => {
         await seedDatabase();
         const user = await getCurrentUser();
+
         if (user) {
-            router.replace('/(tabs)');
+            // If already logged in, check if user has set PIN or Biometrics
+            // We'll pass a param to login screen to show the lock gate
+            router.replace('/login?quickAccess=true');
         } else {
             router.replace('/login');
         }
