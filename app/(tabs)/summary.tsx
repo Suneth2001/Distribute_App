@@ -50,6 +50,7 @@ export default function SummaryScreen() {
     const [calendarViewDate, setCalendarViewDate] = useState<Date>(new Date());
     const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
     const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
+    const [checklistDayTab, setChecklistDayTab] = useState<'today' | 'yesterday' | '2days' | 'all'>('today');
     const [refreshing, setRefreshing] = useState(false);
 
     const loadData = async () => {
@@ -758,7 +759,7 @@ export default function SummaryScreen() {
                 <View style={styles.checklistHeader}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                         <Ionicons name="list-circle" size={24} color={isDark ? "#60A5FA" : "#3B82F6"} style={{ marginRight: 8 }} />
-                        <Text style={styles.checklistTitle}>3-Day Sales Check List</Text>
+                        <Text style={styles.checklistTitle}>Sales Check List</Text>
                     </View>
                     <TouchableOpacity
                         style={styles.printChecklistBtn}
@@ -770,17 +771,90 @@ export default function SummaryScreen() {
                     </TouchableOpacity>
                 </View>
 
-                <View style={styles.tableHeaderRow}>
-                    <Text style={[styles.columnHeader, { flex: 2.5, textAlign: 'left' }]}>PRODUCT</Text>
-                    <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'center' }]}>2 DAYS</Text>
-                    <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'center' }]}>YEST.</Text>
-                    <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'right', color: '#3B82F6', fontWeight: '900' }]}>TODAY</Text>
+                {/* Day Selection Tabs: Today (Default), Yesterday, 2 Days, All */}
+                <View style={styles.checklistTabContainer}>
+                    <TouchableOpacity
+                        style={[styles.checklistTab, checklistDayTab === 'today' && styles.checklistTabActive]}
+                        onPress={() => setChecklistDayTab('today')}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={[styles.checklistTabText, checklistDayTab === 'today' && styles.checklistTabTextActive]}>
+                            Today (අද)
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.checklistTab, checklistDayTab === 'yesterday' && styles.checklistTabActive]}
+                        onPress={() => setChecklistDayTab('yesterday')}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={[styles.checklistTabText, checklistDayTab === 'yesterday' && styles.checklistTabTextActive]}>
+                            Yesterday (ඊයේ)
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.checklistTab, checklistDayTab === '2days' && styles.checklistTabActive]}
+                        onPress={() => setChecklistDayTab('2days')}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={[styles.checklistTabText, checklistDayTab === '2days' && styles.checklistTabTextActive]}>
+                            2 Days (පෙර දින 2)
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.checklistTab, checklistDayTab === 'all' && styles.checklistTabActive]}
+                        onPress={() => setChecklistDayTab('all')}
+                        activeOpacity={0.7}
+                    >
+                        <Text style={[styles.checklistTabText, checklistDayTab === 'all' && styles.checklistTabTextActive]}>
+                            All 3 Days
+                        </Text>
+                    </TouchableOpacity>
                 </View>
 
-                {threeDaySales.length > 0 ? (
-                    threeDaySales.map((item, idx) => (
+                {/* Dynamic Table Header */}
+                {checklistDayTab !== 'all' ? (
+                    <View style={styles.tableHeaderRow}>
+                        <Text style={[styles.columnHeader, { flex: 3, textAlign: 'left' }]}>PRODUCT (භාණ්ඩය)</Text>
+                        <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'right', color: '#3B82F6', fontWeight: '900' }]}>
+                            {checklistDayTab === 'today' ? 'TODAY (අද)' : checklistDayTab === 'yesterday' ? 'YEST. (ඊයේ)' : '2 DAYS AGO'}
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={styles.tableHeaderRow}>
+                        <Text style={[styles.columnHeader, { flex: 2.2, textAlign: 'left' }]}>PRODUCT</Text>
+                        <Text style={[styles.columnHeader, { flex: 1, textAlign: 'center' }]}>2 DAYS</Text>
+                        <Text style={[styles.columnHeader, { flex: 1, textAlign: 'center' }]}>YEST.</Text>
+                        <Text style={[styles.columnHeader, { flex: 1, textAlign: 'right', color: '#3B82F6', fontWeight: '900' }]}>TODAY</Text>
+                    </View>
+                )}
+
+                {/* Table Rows for Selected Tab */}
+                {(() => {
+                    const displayedItems = checklistDayTab === 'today'
+                        ? threeDaySales.filter(item => item.todayQty > 0)
+                        : checklistDayTab === 'yesterday'
+                        ? threeDaySales.filter(item => item.yestQty > 0)
+                        : checklistDayTab === '2days'
+                        ? threeDaySales.filter(item => item.twoDaysQty > 0)
+                        : threeDaySales;
+
+                    if (displayedItems.length === 0) {
+                        return (
+                            <Text style={styles.emptyChecklistText}>
+                                {checklistDayTab === 'today' ? 'No items sold today' :
+                                 checklistDayTab === 'yesterday' ? 'No items sold yesterday' :
+                                 checklistDayTab === '2days' ? 'No items sold 2 days ago' :
+                                 'No sales recorded in the past 3 days'}
+                            </Text>
+                        );
+                    }
+
+                    return displayedItems.map((item, idx) => (
                         <View key={item.id || idx} style={styles.tableRow}>
-                            <View style={{ flex: 2.5, paddingRight: 6 }}>
+                            <View style={{ flex: checklistDayTab !== 'all' ? 3 : 2.2, paddingRight: 6 }}>
                                 <Text style={styles.productNameText} numberOfLines={1}>
                                     {item.nameSinhala || item.name}
                                 </Text>
@@ -790,20 +864,47 @@ export default function SummaryScreen() {
                                     </Text>
                                 ) : null}
                             </View>
-                            <Text style={[styles.qtyText, { flex: 1.2, textAlign: 'center' }]}>
-                                {item.twoDaysQty > 0 ? item.twoDaysQty : '-'}
-                            </Text>
-                            <Text style={[styles.qtyText, { flex: 1.2, textAlign: 'center' }]}>
-                                {item.yestQty > 0 ? item.yestQty : '-'}
-                            </Text>
-                            <Text style={[styles.todayQtyText, { flex: 1.2, textAlign: 'right' }]}>
-                                {item.todayQty > 0 ? item.todayQty : '-'}
-                            </Text>
+
+                            {checklistDayTab === 'today' && (
+                                <View style={{ flex: 1.2, alignItems: 'flex-end', justifyContent: 'center' }}>
+                                    <View style={[styles.qtyBadge, { backgroundColor: isDark ? 'rgba(59, 130, 246, 0.2)' : '#EFF6FF' }]}>
+                                        <Text style={styles.todayQtyText}>{item.todayQty}</Text>
+                                    </View>
+                                </View>
+                            )}
+
+                            {checklistDayTab === 'yesterday' && (
+                                <View style={{ flex: 1.2, alignItems: 'flex-end', justifyContent: 'center' }}>
+                                    <View style={[styles.qtyBadge, { backgroundColor: isDark ? 'rgba(245, 158, 11, 0.2)' : '#FEF3C7' }]}>
+                                        <Text style={[styles.qtyText, { color: isDark ? '#FBBF24' : '#D97706', fontWeight: '800' }]}>{item.yestQty}</Text>
+                                    </View>
+                                </View>
+                            )}
+
+                            {checklistDayTab === '2days' && (
+                                <View style={{ flex: 1.2, alignItems: 'flex-end', justifyContent: 'center' }}>
+                                    <View style={[styles.qtyBadge, { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.2)' : '#F3E8FF' }]}>
+                                        <Text style={[styles.qtyText, { color: isDark ? '#A78BFA' : '#7C3AED', fontWeight: '800' }]}>{item.twoDaysQty}</Text>
+                                    </View>
+                                </View>
+                            )}
+
+                            {checklistDayTab === 'all' && (
+                                <>
+                                    <Text style={[styles.qtyText, { flex: 1, textAlign: 'center' }]}>
+                                        {item.twoDaysQty > 0 ? item.twoDaysQty : '-'}
+                                    </Text>
+                                    <Text style={[styles.qtyText, { flex: 1, textAlign: 'center' }]}>
+                                        {item.yestQty > 0 ? item.yestQty : '-'}
+                                    </Text>
+                                    <Text style={[styles.todayQtyText, { flex: 1, textAlign: 'right' }]}>
+                                        {item.todayQty > 0 ? item.todayQty : '-'}
+                                    </Text>
+                                </>
+                            )}
                         </View>
-                    ))
-                ) : (
-                    <Text style={styles.emptyChecklistText}>No sales recorded in the past 3 days</Text>
-                )}
+                    ));
+                })()}
             </View>
 
             <View style={{ height: 40 }} />
@@ -1164,6 +1265,45 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
         color: '#FFF',
         fontSize: 13,
         fontWeight: '700',
+    },
+    checklistTabContainer: {
+        flexDirection: 'row',
+        backgroundColor: isDark ? '#111827' : '#F3F4F6',
+        borderRadius: 10,
+        padding: 4,
+        marginBottom: 14,
+    },
+    checklistTab: {
+        flex: 1,
+        paddingVertical: 7,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 8,
+    },
+    checklistTabActive: {
+        backgroundColor: isDark ? '#374151' : '#FFF',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.15,
+        shadowRadius: 2,
+        elevation: 2,
+    },
+    checklistTabText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: isDark ? '#9CA3AF' : '#6B7280',
+    },
+    checklistTabTextActive: {
+        color: isDark ? '#60A5FA' : '#2563EB',
+        fontWeight: '800',
+    },
+    qtyBadge: {
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        borderRadius: 8,
+        minWidth: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     tableHeaderRow: {
         flexDirection: 'row',
