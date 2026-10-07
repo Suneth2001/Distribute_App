@@ -3,7 +3,16 @@ import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Dimensions, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, useColorScheme } from 'react-native';
 import { BarChart, PieChart } from 'react-native-chart-kit';
-import { getExpenses, getTransactions } from '../../src/store/database';
+import { getExpenses, getProducts, getTransactions } from '../../src/store/database';
+
+interface ThreeDayItem {
+    id: string;
+    name: string;
+    twoDaysQty: number;
+    yestQty: number;
+    todayQty: number;
+    total3DayQty: number;
+}
 
 export default function SummaryScreen() {
     const isDark = useColorScheme() === 'dark';
@@ -13,6 +22,7 @@ export default function SummaryScreen() {
     const [costs, setCosts] = useState(0);
     const [expenses, setExpensesState] = useState(0);
     const [topItems, setTopItems] = useState<any[]>([]);
+    const [threeDaySales, setThreeDaySales] = useState<ThreeDayItem[]>([]);
     const [filter, setFilter] = useState<'today' | 'week' | 'month' | 'all'>('all');
     const [refreshing, setRefreshing] = useState(false);
 
@@ -20,9 +30,10 @@ export default function SummaryScreen() {
         setRefreshing(true);
         const trans = await getTransactions();
         const exps = await getExpenses();
+        const allProducts = await getProducts();
 
         const now = new Date();
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
 
         // Calculate start of week (Sunday)
         const tempDate = new Date(now);
@@ -30,7 +41,7 @@ export default function SummaryScreen() {
         const startOfWeek = new Date(tempDate.setDate(diff));
         startOfWeek.setHours(0, 0, 0, 0);
 
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
 
         const filteredTrans = trans.filter(t => {
             const tDate = new Date(t.date);
@@ -79,10 +90,72 @@ export default function SummaryScreen() {
             tExp += e.amount;
         });
 
+        // --- 3-Day Sales Check List Calculation ---
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+        const startOfYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
+        const endOfYest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
+
+        const startOf2Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2, 0, 0, 0, 0);
+        const endOf2Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2, 23, 59, 59, 999);
+
+        const threeDayMap: { [key: string]: ThreeDayItem } = {};
+
+        // Seed with products
+        allProducts.forEach(p => {
+            threeDayMap[p.id] = {
+                id: p.id,
+                name: p.nameEnglish || p.name || 'Product',
+                twoDaysQty: 0,
+                yestQty: 0,
+                todayQty: 0,
+                total3DayQty: 0,
+            };
+        });
+
+        // Scan all transactions for 3-day history
+        trans.forEach((t: any) => {
+            const tTime = new Date(t.date).getTime();
+            if (isNaN(tTime)) return;
+
+            const isToday = tTime >= startOfToday.getTime() && tTime <= endOfToday.getTime();
+            const isYest = tTime >= startOfYest.getTime() && tTime <= endOfYest.getTime();
+            const is2Days = tTime >= startOf2Days.getTime() && tTime <= endOf2Days.getTime();
+
+            if (!isToday && !isYest && !is2Days) return;
+
+            const itemsList = Array.isArray(t.items) ? t.items : (Array.isArray(t.products) ? t.products : []);
+            itemsList.forEach((item: any) => {
+                if (item.isReturned) return;
+                const id = item.id || item.productId || item.nameEnglish || 'unknown';
+                if (!threeDayMap[id]) {
+                    threeDayMap[id] = {
+                        id,
+                        name: item.nameEnglish || item.name || item.title || 'Product',
+                        twoDaysQty: 0,
+                        yestQty: 0,
+                        todayQty: 0,
+                        total3DayQty: 0,
+                    };
+                }
+                const q = typeof item.qty === 'number' ? item.qty : (parseFloat(item.qty) || 0);
+                if (isToday) threeDayMap[id].todayQty += q;
+                if (isYest) threeDayMap[id].yestQty += q;
+                if (is2Days) threeDayMap[id].twoDaysQty += q;
+                threeDayMap[id].total3DayQty += q;
+            });
+        });
+
+        const threeDayList = Object.values(threeDayMap)
+            .filter(item => item.total3DayQty > 0 || item.todayQty > 0 || item.yestQty > 0 || item.twoDaysQty > 0)
+            .sort((a, b) => b.todayQty - a.todayQty || b.yestQty - a.yestQty || b.twoDaysQty - a.twoDaysQty);
+
         setSales(tSales);
         setCosts(tCosts);
         setExpensesState(tExp);
         setTopItems(sortedItems);
+        setThreeDaySales(threeDayList);
         setRefreshing(false);
     };
 
@@ -160,39 +233,7 @@ export default function SummaryScreen() {
                 </View>
             </View>
 
-            <View style={styles.chartContainer}>
-                <Text style={styles.chartTitle}>Business Breakdown</Text>
-                <PieChart
-                    data={pieData}
-                    width={screenWidth - 32}
-                    height={200}
-                    chartConfig={chartConfig}
-                    accessor={"population"}
-                    backgroundColor={"transparent"}
-                    paddingLeft={"15"}
-                    absolute
-                />
-            </View>
-
-            {/* Top Items List */}
-            <View style={styles.topItemsContainer}>
-                <Text style={styles.chartTitle}>Top 5 Selling Items</Text>
-                {topItems.length > 0 ? topItems.map((item, index) => (
-                    <View key={index} style={styles.topItemRow}>
-                        <View style={styles.itemRank}>
-                            <Text style={styles.rankText}>{index + 1}</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.itemName}>{item.name}</Text>
-                            <Text style={styles.itemSubText}>{item.qty} units sold</Text>
-                        </View>
-                        <Text style={styles.itemTotal}>Rs {item.total.toFixed(0)}</Text>
-                    </View>
-                )) : (
-                    <Text style={{ textAlign: 'center', color: isDark ? '#9CA3AF' : '#6B7280', marginVertical: 20 }}>No items sold in this period</Text>
-                )}
-            </View>
-
+            {/* Revenue vs Profit Bar Chart */}
             <View style={styles.chartContainer}>
                 <View style={styles.chartHeader}>
                     <Text style={styles.chartTitle}>Revenue vs Profit Analysis</Text>
@@ -240,6 +281,77 @@ export default function SummaryScreen() {
                     showValuesOnTopOfBars
                 />
             </View>
+
+            {/* Business Breakdown Pie Chart */}
+            <View style={styles.chartContainer}>
+                <Text style={styles.chartTitle}>Business Breakdown</Text>
+                <PieChart
+                    data={pieData}
+                    width={screenWidth - 32}
+                    height={200}
+                    chartConfig={chartConfig}
+                    accessor={"population"}
+                    backgroundColor={"transparent"}
+                    paddingLeft={"15"}
+                    absolute
+                />
+            </View>
+
+            {/* Top 5 Items List */}
+            <View style={styles.topItemsContainer}>
+                <Text style={styles.chartTitle}>Top 5 Selling Items</Text>
+                {topItems.length > 0 ? topItems.map((item, index) => (
+                    <View key={index} style={styles.topItemRow}>
+                        <View style={styles.itemRank}>
+                            <Text style={styles.rankText}>{index + 1}</Text>
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.itemName}>{item.name}</Text>
+                            <Text style={styles.itemSubText}>{item.qty} units sold</Text>
+                        </View>
+                        <Text style={styles.itemTotal}>Rs {item.total.toFixed(0)}</Text>
+                    </View>
+                )) : (
+                    <Text style={{ textAlign: 'center', color: isDark ? '#9CA3AF' : '#6B7280', marginVertical: 20 }}>No items sold in this period</Text>
+                )}
+            </View>
+
+            {/* 3-Day Sales Check List Card (Page Bottom) */}
+            <View style={styles.checklistCard}>
+                <View style={styles.checklistHeader}>
+                    <Ionicons name="list-circle" size={24} color={isDark ? "#60A5FA" : "#3B82F6"} style={{ marginRight: 8 }} />
+                    <Text style={styles.checklistTitle}>3-Day Sales Check List</Text>
+                </View>
+
+                <View style={styles.tableHeaderRow}>
+                    <Text style={[styles.columnHeader, { flex: 2.5, textAlign: 'left' }]}>PRODUCT</Text>
+                    <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'center' }]}>2 DAYS</Text>
+                    <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'center' }]}>YEST.</Text>
+                    <Text style={[styles.columnHeader, { flex: 1.2, textAlign: 'right', color: '#3B82F6', fontWeight: '900' }]}>TODAY</Text>
+                </View>
+
+                {threeDaySales.length > 0 ? (
+                    threeDaySales.map((item, idx) => (
+                        <View key={item.id || idx} style={styles.tableRow}>
+                            <Text style={[styles.productNameText, { flex: 2.5 }]} numberOfLines={1}>
+                                {item.name}
+                            </Text>
+                            <Text style={[styles.qtyText, { flex: 1.2, textAlign: 'center' }]}>
+                                {item.twoDaysQty > 0 ? item.twoDaysQty : '-'}
+                            </Text>
+                            <Text style={[styles.qtyText, { flex: 1.2, textAlign: 'center' }]}>
+                                {item.yestQty > 0 ? item.yestQty : '-'}
+                            </Text>
+                            <Text style={[styles.todayQtyText, { flex: 1.2, textAlign: 'right' }]}>
+                                {item.todayQty > 0 ? item.todayQty : '-'}
+                            </Text>
+                        </View>
+                    ))
+                ) : (
+                    <Text style={styles.emptyChecklistText}>No sales recorded in the past 3 days</Text>
+                )}
+            </View>
+
             <View style={{ height: 40 }} />
         </ScrollView>
     );
@@ -290,6 +402,69 @@ const getStyles = (isDark: boolean) => StyleSheet.create({
 
     insightBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: isDark ? '#374151' : '#F3F4F6', padding: 12, borderRadius: 12, marginBottom: 16 },
     insightText: { fontSize: 13, color: isDark ? '#D1D5DB' : '#4B5563', marginLeft: 4 },
+
+    checklistCard: {
+        backgroundColor: isDark ? '#1F2937' : '#FFF',
+        marginHorizontal: 16,
+        marginTop: 12,
+        padding: 16,
+        borderRadius: 16,
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowRadius: 5,
+        elevation: 3,
+    },
+    checklistHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    checklistTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: isDark ? '#F9FAFB' : '#111827',
+    },
+    tableHeaderRow: {
+        flexDirection: 'row',
+        paddingBottom: 8,
+        borderBottomWidth: 1,
+        borderColor: isDark ? '#374151' : '#E5E7EB',
+        marginBottom: 4,
+    },
+    columnHeader: {
+        fontSize: 11,
+        fontWeight: '700',
+        color: isDark ? '#9CA3AF' : '#6B7280',
+        letterSpacing: 0.5,
+    },
+    tableRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderColor: isDark ? '#374151' : '#F3F4F6',
+    },
+    productNameText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: isDark ? '#F9FAFB' : '#111827',
+    },
+    qtyText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: isDark ? '#D1D5DB' : '#4B5563',
+    },
+    todayQtyText: {
+        fontSize: 15,
+        fontWeight: '800',
+        color: isDark ? '#60A5FA' : '#3B82F6',
+    },
+    emptyChecklistText: {
+        textAlign: 'center',
+        color: isDark ? '#9CA3AF' : '#6B7280',
+        marginVertical: 16,
+        fontSize: 13,
+    },
 
     topItemsContainer: { backgroundColor: isDark ? '#1F2937' : '#FFF', padding: 16, marginHorizontal: 16, marginTop: 12, borderRadius: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, elevation: 3 },
     topItemRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: isDark ? '#374151' : '#F3F4F6' },
